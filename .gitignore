@@ -1,0 +1,10 @@
+/target/
+.dtop/
+*.log
+*.tmp
+.DS_Store
+.idea/
+.vscode/
+config.toml
+.env
+.env.*

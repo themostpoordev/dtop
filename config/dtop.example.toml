@@ -1,0 +1,10 @@
+# dtop configuration. Copy to ~/.config/dtop/config.toml if desired.
+# Docker access is local-only through this Unix socket.
+docker_socket = "/var/run/docker.sock"
+refresh_ms = 1000
+theme = "default"
+sort = "cpu"
+show_stopped = true
+follow_logs = true
+density = "comfortable"
+show_hints = true
