@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{BarChart, Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, Tabs, Wrap},
+    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, Tabs, Wrap},
     Frame,
 };
 
@@ -222,56 +222,122 @@ fn summary_cards(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
 fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Min(8), Constraint::Min(6)])
+        .constraints([Constraint::Length(8), Constraint::Min(12), Constraint::Min(6)])
         .split(area);
     summary_cards(frame, app, rows[0], theme);
-    let charts = Layout::default()
+    let main = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(rows[1]);
-    let cpu_bars = app
-        .visible_indices()
+
+    // CPU panel: total % + top services by CPU (bar list).
+    let cpu_history = app.data.history.as_slice_cpu();
+    let cpu_latest = cpu_history.last().copied().unwrap_or(0);
+    let mut cpu_lines = vec![
+        Line::from(Span::styled(
+            format!("total cpu  {cpu_latest}%"),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+    let mut top_cpu = app
+        .data
+        .containers
         .iter()
-        .take(8)
-        .map(|i| {
-            let c = &app.data.containers[*i];
-            (c.name.as_str(), c.metrics.cpu_percent.max(0.0) as u64)
-        })
+        .map(|c| (c.name.clone(), c.metrics.cpu_percent))
         .collect::<Vec<_>>();
-    frame.render_widget(
-        BarChart::default()
-            .block(panel(theme, "CPU by container · %"))
-            .data(&cpu_bars)
-            .bar_width(7)
-            .bar_gap(2)
-            .max(100)
-            .bar_style(Style::default().fg(theme.accent))
-            .value_style(Style::default().fg(theme.text)),
-        charts[0],
-    );
-    let (used, limit) = app.memory_summary();
-    let mem_bars = app
-        .visible_indices()
+    top_cpu.sort_by(|a, b| b.1.total_cmp(&a.1));
+    for (name, percent) in top_cpu.into_iter().take(8) {
+        if percent <= 0.0 {
+            continue;
+        }
+        let bar_len = ((percent / 100.0) * 20.0) as usize;
+        cpu_lines.push(Line::from(vec![
+            Span::styled(format!("{name:<16} "), Style::default().fg(theme.muted)),
+            Span::styled("█".repeat(bar_len), Style::default().fg(theme.accent)),
+            Span::styled(format!(" {percent:5.1}%"), Style::default().fg(theme.text)),
+        ]));
+    }
+    if cpu_lines.len() <= 2 {
+        cpu_lines.push(Line::from(Span::styled(
+            "no active containers",
+            Style::default().fg(theme.muted),
+        )));
+    }
+    frame.render_widget(Paragraph::new(cpu_lines).block(panel(theme, "CPU")), main[0]);
+
+    // Memory panel: list + top services by memory.
+    let memory = &app.data.host_memory;
+    let mut mem_lines = Vec::new();
+    let ram_percent = if memory.ram_total > 0 {
+        (memory.ram_used as f64 / memory.ram_total as f64) * 100.0
+    } else {
+        0.0
+    };
+    mem_lines.push(Line::from(vec![
+        Span::styled("RAM       ", Style::default().fg(theme.muted)),
+        Span::styled(
+            format!("{}/{}", format_bytes(memory.ram_used), format_bytes(memory.ram_total)),
+            Style::default().fg(theme.text),
+        ),
+        Span::styled(format!("  {ram_percent:.0}%"), Style::default().fg(theme.good)),
+    ]));
+    let mut add_mem_row = |label: &str, used: u64, total: u64, color: ratatui::style::Color| {
+        let percent = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
+        mem_lines.push(Line::from(vec![
+            Span::styled(format!("{label:<9}"), Style::default().fg(theme.muted)),
+            Span::styled(
+                format!("{}/{}", format_bytes(used), format_bytes(total)),
+                Style::default().fg(theme.text),
+            ),
+            Span::styled(format!("  {percent:.0}%"), Style::default().fg(color)),
+        ]));
+    };
+    add_mem_row("zram", memory.zram_used, memory.zram_total, theme.warn);
+    add_mem_row("swapfile", memory.swapfile_used, memory.swapfile_total, theme.warn);
+    if memory.zram_total == 0 {
+        mem_lines
+            .push(Line::from(Span::styled("zram: not present", Style::default().fg(theme.muted))));
+    }
+    if memory.swapfile_total == 0 {
+        mem_lines.push(Line::from(Span::styled(
+            "swapfile: not present",
+            Style::default().fg(theme.muted),
+        )));
+    }
+    let used_sum = memory.ram_used + memory.zram_used + memory.swapfile_used;
+    let total_sum = memory.ram_total + memory.zram_total + memory.swapfile_total;
+    let total_percent =
+        if total_sum > 0 { (used_sum as f64 / total_sum as f64) * 100.0 } else { 0.0 };
+    mem_lines.push(Line::from(""));
+    mem_lines.push(Line::from(vec![
+        Span::styled("total     ", Style::default().fg(theme.muted)),
+        Span::styled(
+            format!("{}/{}", format_bytes(used_sum), format_bytes(total_sum)),
+            Style::default().fg(theme.text),
+        ),
+        Span::styled(format!("  {total_percent:.0}%"), Style::default().fg(theme.good)),
+    ]));
+    mem_lines.push(Line::from(""));
+    mem_lines.push(Line::from(Span::styled("services", Style::default().fg(theme.muted))));
+    let mut top_mem = app
+        .data
+        .containers
         .iter()
-        .take(8)
-        .map(|i| {
-            let c = &app.data.containers[*i];
-            let percent = c.metrics.memory_percent();
-            (c.name.as_str(), percent.max(0.0) as u64)
-        })
+        .map(|c| (c.name.clone(), c.metrics.memory_bytes))
         .collect::<Vec<_>>();
-    let mem_title = format!("MEM by container · {}/{}", format_bytes(used), format_bytes(limit));
-    frame.render_widget(
-        BarChart::default()
-            .block(panel(theme, &mem_title))
-            .data(&mem_bars)
-            .bar_width(7)
-            .bar_gap(2)
-            .max(100)
-            .bar_style(Style::default().fg(theme.good))
-            .value_style(Style::default().fg(theme.text)),
-        charts[1],
-    );
+    top_mem.sort_by_key(|item| std::cmp::Reverse(item.1));
+    for (name, bytes) in top_mem.into_iter() {
+        if bytes == 0 {
+            continue;
+        }
+        mem_lines.push(Line::from(vec![
+            Span::styled(format!("{name:<16} "), Style::default().fg(theme.muted)),
+            Span::styled(format_bytes(bytes), Style::default().fg(theme.text)),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(mem_lines).block(panel(theme, "memory")), main[1]);
+
     let recent = app
         .data
         .events
@@ -290,35 +356,6 @@ fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         })
         .collect::<Vec<_>>();
     frame.render_widget(List::new(recent).block(panel(theme, "recent events")), rows[2]);
-    let memory = &app.data.host_memory;
-    let mem_lines = vec![
-        Line::from(vec![
-            Span::styled("RAM       ", Style::default().fg(theme.muted)),
-            Span::styled(
-                format!("{}/{}", format_bytes(memory.ram_used), format_bytes(memory.ram_total)),
-                Style::default().fg(theme.text),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("zram      ", Style::default().fg(theme.muted)),
-            Span::styled(
-                format!("{}/{}", format_bytes(memory.zram_used), format_bytes(memory.zram_total)),
-                Style::default().fg(theme.warn),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("swapfile  ", Style::default().fg(theme.muted)),
-            Span::styled(
-                format!(
-                    "{}/{}",
-                    format_bytes(memory.swapfile_used),
-                    format_bytes(memory.swapfile_total)
-                ),
-                Style::default().fg(theme.warn),
-            ),
-        ]),
-    ];
-    frame.render_widget(Paragraph::new(mem_lines).block(panel(theme, "host memory")), charts[1]);
 }
 fn containers(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let chunks = Layout::default()
@@ -593,6 +630,7 @@ fn settings(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         ("Follow logs", yes_no(app.config.follow_logs)),
         ("Density", app.config.density.label().to_owned()),
         ("Keybinding hints", yes_no(app.config.show_hints)),
+        ("Show GPU status", yes_no(app.config.show_gpu)),
         ("Save settings", "Enter".into()),
         ("Reset defaults", "Enter".into()),
     ];

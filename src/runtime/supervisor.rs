@@ -16,8 +16,8 @@ use tokio::{
 use crate::{
     action::ContainerAction,
     docker::{
-        container_meta, container_row, details, event, image, log_output, network, raw_stats,
-        read_host_memory, volume, DockerClient, HostMemory, RawStats,
+        container_meta, container_row, details, detect_gpus, event, image, log_output, network,
+        raw_stats, read_host_memory, volume, DockerClient, GpuInfo, HostMemory, RawStats,
     },
     model::{
         ConnectionState, ContainerDetails, ContainerMeta, ContainerRow, DockerEvent, ImageRow,
@@ -57,6 +57,7 @@ pub enum RuntimeEvent {
         volumes: Vec<VolumeRow>,
         networks: Vec<NetworkRow>,
         host_memory: HostMemory,
+        gpu: GpuInfo,
     },
     Details(ContainerDetails),
     DockerEvent(DockerEvent),
@@ -127,6 +128,7 @@ impl Supervisor {
             message: format!("connecting to {}", self.client.socket),
         });
         self.start_inventory(&mut inventory_tasks, &mut inventory_running);
+        self.start_fast(&mut fast_tasks, &mut fast_running);
 
         loop {
             tokio::select! {
@@ -139,6 +141,7 @@ impl Supervisor {
                             self.apply_stats(work);
                             self.emit(RuntimeEvent::Connection { state: ConnectionState::Connected, message: "Docker daemon connected".into() });
                             self.emit(RuntimeEvent::Snapshot { containers: self.rows() });
+                            self.start_fast(&mut fast_tasks, &mut fast_running);
                         }
                         Ok(Err(error)) => self.emit(RuntimeEvent::Connection { state: classify_error(&error), message: error.to_string() }),
                         Err(error) => self.emit(RuntimeEvent::Error(format!("stats task failed: {error}"))),
@@ -155,7 +158,7 @@ impl Supervisor {
                             self.metadata = work.metadata.into_iter().collect();
                             self.emit(RuntimeEvent::Connection { state: ConnectionState::Connected, message: "Docker daemon connected".into() });
                             self.emit(RuntimeEvent::Snapshot { containers: self.rows() });
-                            self.emit(RuntimeEvent::Inventory { images: work.images, volumes: work.volumes, networks: work.networks, host_memory: work.host_memory });
+                            self.emit(RuntimeEvent::Inventory { images: work.images, volumes: work.volumes, networks: work.networks, host_memory: work.host_memory, gpu: work.gpu });
                         }
                         Ok(Err(error)) => self.emit(RuntimeEvent::Connection { state: classify_error(&error), message: error.to_string() }),
                         Err(error) => self.emit(RuntimeEvent::Error(format!("inventory task failed: {error}"))),
@@ -228,12 +231,15 @@ impl Supervisor {
         if ids.is_empty() {
             return Vec::new();
         }
+        // At 50ms we want every container sampled as often as possible: use a
+        // large rotating batch so the full set is covered quickly. At slower
+        // rates keep concurrency bounded to avoid hammering the daemon.
         let budget = if self.refresh_ms <= 100 {
-            STATS_CONCURRENCY
+            STATS_CONCURRENCY * 4
         } else if self.refresh_ms <= 500 {
             STATS_CONCURRENCY * 2
         } else {
-            STATS_CONCURRENCY * 4
+            STATS_CONCURRENCY
         };
         let count = budget.min(ids.len());
         let selected = (0..count)
@@ -374,6 +380,7 @@ struct InventoryWork {
     networks: Vec<NetworkRow>,
     metadata: Vec<(String, ContainerMeta)>,
     host_memory: HostMemory,
+    gpu: GpuInfo,
 }
 
 async fn collect_fast(client: Arc<DockerClient>, ids: Vec<String>) -> Result<FastWork> {
@@ -420,6 +427,7 @@ async fn collect_inventory(client: Arc<DockerClient>, show_stopped: bool) -> Res
         networks: networks.context("collect networks")?.into_iter().map(network).collect(),
         metadata,
         host_memory: read_host_memory(),
+        gpu: detect_gpus(),
     })
 }
 

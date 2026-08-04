@@ -85,6 +85,8 @@ pub struct AppData {
     pub logs: BoundedLines<super::LogLine>,
     pub container_metrics: HashMap<String, super::Metrics>,
     pub host_memory: HostMemory,
+    pub gpu: crate::docker::GpuInfo,
+    pub history: super::History,
 }
 
 impl Default for AppData {
@@ -99,6 +101,8 @@ impl Default for AppData {
             logs: BoundedLines::new(5000),
             container_metrics: HashMap::new(),
             host_memory: HostMemory::default(),
+            gpu: crate::docker::GpuInfo::none(),
+            history: super::History::new(),
         }
     }
 }

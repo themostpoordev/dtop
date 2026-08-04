@@ -8,3 +8,4 @@ show_stopped = true
 follow_logs = true
 density = "comfortable"
 show_hints = true
+show_gpu = true

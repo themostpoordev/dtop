@@ -137,12 +137,18 @@ impl App {
                 if self.selected_container >= self.data.containers.len() {
                     self.selected_container = self.data.containers.len().saturating_sub(1);
                 }
+                let cpu = self.data.containers.iter().map(|c| c.metrics.cpu_percent).sum::<f64>();
+                let memory =
+                    self.data.containers.iter().map(|c| c.metrics.memory_percent()).sum::<f64>();
+                self.data.history.push_cpu(cpu.max(0.0) as u64);
+                self.data.history.push_memory(memory.max(0.0) as u64);
             }
-            RuntimeEvent::Inventory { images, volumes, networks, host_memory } => {
+            RuntimeEvent::Inventory { images, volumes, networks, host_memory, gpu } => {
                 self.data.images = images;
                 self.data.volumes = volumes;
                 self.data.networks = networks;
                 self.data.host_memory = host_memory;
+                self.data.gpu = gpu;
             }
             RuntimeEvent::Details(details) => self.data.details = Some(details),
             RuntimeEvent::DockerEvent(event) => self.data.events.push(event),
@@ -238,9 +244,9 @@ impl App {
             },
             Screen::Containers => self.open_details().await?,
             Screen::Settings => {
-                if self.settings_selection == 7 {
+                if self.settings_selection == 8 {
                     self.save_settings()?;
-                } else if self.settings_selection == 8 {
+                } else if self.settings_selection == 9 {
                     self.config = Config::default();
                     self.notice = Some("settings reset to defaults".into());
                     self.push_settings().await;
@@ -356,7 +362,7 @@ impl App {
     fn move_down(&mut self) {
         match self.screen {
             Screen::Home => self.home_selection = (self.home_selection + 1).min(6),
-            Screen::Settings => self.settings_selection = (self.settings_selection + 1).min(8),
+            Screen::Settings => self.settings_selection = (self.settings_selection + 1).min(9),
             Screen::Containers => {
                 let visible = self.visible_indices();
                 if let Some(position) =
@@ -399,8 +405,11 @@ impl App {
             4 => self.config.follow_logs = !self.config.follow_logs,
             5 => self.config.density = self.config.density.toggle(),
             6 => self.config.show_hints = !self.config.show_hints,
+            7 => self.config.show_gpu = !self.config.show_gpu,
             _ => {}
         }
+        let _ = self.config.save(&self.config_path);
+        self.notice = Some(format!("saved {}", self.config_path.display()));
     }
     fn save_settings(&mut self) -> Result<()> {
         self.config.save(&self.config_path)?;

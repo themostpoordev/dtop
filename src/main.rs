@@ -78,7 +78,7 @@ async fn run_loop(
     app: &mut App,
     event_rx: &mut tokio::sync::mpsc::Receiver<RuntimeEvent>,
 ) -> Result<()> {
-    let mut tick = time::interval(Duration::from_millis(33));
+    let mut tick = time::interval(Duration::from_millis(16));
     tick.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     let mut keys = EventStream::new();
     loop {

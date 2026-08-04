@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 pub const MIN_REFRESH_MS: u64 = 50;
 const DEFAULT_SOCKET: &str = "/var/run/docker.sock";
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeName {
@@ -95,19 +99,22 @@ pub struct Config {
     pub follow_logs: bool,
     pub density: Density,
     pub show_hints: bool,
+    #[serde(default = "default_true")]
+    pub show_gpu: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             docker_socket: DEFAULT_SOCKET.into(),
-            refresh_ms: 1000,
+            refresh_ms: 2000,
             theme: ThemeName::Default,
             sort: SortOrder::Cpu,
             show_stopped: true,
             follow_logs: true,
             density: Density::Comfortable,
             show_hints: true,
+            show_gpu: true,
         }
     }
 }
