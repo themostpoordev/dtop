@@ -222,14 +222,14 @@ fn summary_cards(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
 fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Min(8)])
+        .constraints([Constraint::Length(8), Constraint::Min(8), Constraint::Min(6)])
         .split(area);
     summary_cards(frame, app, rows[0], theme);
-    let lower = Layout::default()
+    let charts = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(rows[1]);
-    let bars = app
+    let cpu_bars = app
         .visible_indices()
         .iter()
         .take(8)
@@ -241,13 +241,36 @@ fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     frame.render_widget(
         BarChart::default()
             .block(panel(theme, "CPU by container · %"))
-            .data(&bars)
+            .data(&cpu_bars)
             .bar_width(7)
             .bar_gap(2)
             .max(100)
             .bar_style(Style::default().fg(theme.accent))
             .value_style(Style::default().fg(theme.text)),
-        lower[0],
+        charts[0],
+    );
+    let (used, limit) = app.memory_summary();
+    let mem_bars = app
+        .visible_indices()
+        .iter()
+        .take(8)
+        .map(|i| {
+            let c = &app.data.containers[*i];
+            let percent = c.metrics.memory_percent();
+            (c.name.as_str(), percent.max(0.0) as u64)
+        })
+        .collect::<Vec<_>>();
+    let mem_title = format!("MEM by container · {}/{}", format_bytes(used), format_bytes(limit));
+    frame.render_widget(
+        BarChart::default()
+            .block(panel(theme, &mem_title))
+            .data(&mem_bars)
+            .bar_width(7)
+            .bar_gap(2)
+            .max(100)
+            .bar_style(Style::default().fg(theme.good))
+            .value_style(Style::default().fg(theme.text)),
+        charts[1],
     );
     let recent = app
         .data
@@ -266,7 +289,36 @@ fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
             ]))
         })
         .collect::<Vec<_>>();
-    frame.render_widget(List::new(recent).block(panel(theme, "recent events")), lower[1]);
+    frame.render_widget(List::new(recent).block(panel(theme, "recent events")), rows[2]);
+    let memory = &app.data.host_memory;
+    let mem_lines = vec![
+        Line::from(vec![
+            Span::styled("RAM       ", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!("{}/{}", format_bytes(memory.ram_used), format_bytes(memory.ram_total)),
+                Style::default().fg(theme.text),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("zram      ", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!("{}/{}", format_bytes(memory.zram_used), format_bytes(memory.zram_total)),
+                Style::default().fg(theme.warn),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("swapfile  ", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!(
+                    "{}/{}",
+                    format_bytes(memory.swapfile_used),
+                    format_bytes(memory.swapfile_total)
+                ),
+                Style::default().fg(theme.warn),
+            ),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(mem_lines).block(panel(theme, "host memory")), charts[1]);
 }
 fn containers(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let chunks = Layout::default()

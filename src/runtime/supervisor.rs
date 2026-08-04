@@ -17,7 +17,7 @@ use crate::{
     action::ContainerAction,
     docker::{
         container_meta, container_row, details, event, image, log_output, network, raw_stats,
-        volume, DockerClient, RawStats,
+        read_host_memory, volume, DockerClient, HostMemory, RawStats,
     },
     model::{
         ConnectionState, ContainerDetails, ContainerMeta, ContainerRow, DockerEvent, ImageRow,
@@ -45,14 +45,27 @@ pub enum RuntimeCommand {
 
 #[derive(Debug)]
 pub enum RuntimeEvent {
-    Connection { state: ConnectionState, message: String },
-    Snapshot { containers: Vec<ContainerRow> },
-    Inventory { images: Vec<ImageRow>, volumes: Vec<VolumeRow>, networks: Vec<NetworkRow> },
+    Connection {
+        state: ConnectionState,
+        message: String,
+    },
+    Snapshot {
+        containers: Vec<ContainerRow>,
+    },
+    Inventory {
+        images: Vec<ImageRow>,
+        volumes: Vec<VolumeRow>,
+        networks: Vec<NetworkRow>,
+        host_memory: HostMemory,
+    },
     Details(ContainerDetails),
     DockerEvent(DockerEvent),
     Log(LogLine),
     LogsEnded(String),
-    ActionFinished { action: ContainerAction, name: String },
+    ActionFinished {
+        action: ContainerAction,
+        name: String,
+    },
     Error(String),
 }
 
@@ -142,7 +155,7 @@ impl Supervisor {
                             self.metadata = work.metadata.into_iter().collect();
                             self.emit(RuntimeEvent::Connection { state: ConnectionState::Connected, message: "Docker daemon connected".into() });
                             self.emit(RuntimeEvent::Snapshot { containers: self.rows() });
-                            self.emit(RuntimeEvent::Inventory { images: work.images, volumes: work.volumes, networks: work.networks });
+                            self.emit(RuntimeEvent::Inventory { images: work.images, volumes: work.volumes, networks: work.networks, host_memory: work.host_memory });
                         }
                         Ok(Err(error)) => self.emit(RuntimeEvent::Connection { state: classify_error(&error), message: error.to_string() }),
                         Err(error) => self.emit(RuntimeEvent::Error(format!("inventory task failed: {error}"))),
@@ -360,6 +373,7 @@ struct InventoryWork {
     volumes: Vec<VolumeRow>,
     networks: Vec<NetworkRow>,
     metadata: Vec<(String, ContainerMeta)>,
+    host_memory: HostMemory,
 }
 
 async fn collect_fast(client: Arc<DockerClient>, ids: Vec<String>) -> Result<FastWork> {
@@ -405,6 +419,7 @@ async fn collect_inventory(client: Arc<DockerClient>, show_stopped: bool) -> Res
         volumes: volumes.context("collect volumes")?.into_iter().map(volume).collect(),
         networks: networks.context("collect networks")?.into_iter().map(network).collect(),
         metadata,
+        host_memory: read_host_memory(),
     })
 }
 

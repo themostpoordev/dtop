@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::docker::HostMemory;
+
 use super::{
     BoundedLines, ContainerDetails, ContainerRow, DockerEvent, ImageRow, NetworkRow, VolumeRow,
 };
@@ -82,6 +84,7 @@ pub struct AppData {
     pub events: BoundedLines<DockerEvent>,
     pub logs: BoundedLines<super::LogLine>,
     pub container_metrics: HashMap<String, super::Metrics>,
+    pub host_memory: HostMemory,
 }
 
 impl Default for AppData {
@@ -95,6 +98,7 @@ impl Default for AppData {
             events: BoundedLines::new(200),
             logs: BoundedLines::new(5000),
             container_metrics: HashMap::new(),
+            host_memory: HostMemory::default(),
         }
     }
 }

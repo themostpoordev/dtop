@@ -138,10 +138,11 @@ impl App {
                     self.selected_container = self.data.containers.len().saturating_sub(1);
                 }
             }
-            RuntimeEvent::Inventory { images, volumes, networks } => {
+            RuntimeEvent::Inventory { images, volumes, networks, host_memory } => {
                 self.data.images = images;
                 self.data.volumes = volumes;
                 self.data.networks = networks;
+                self.data.host_memory = host_memory;
             }
             RuntimeEvent::Details(details) => self.data.details = Some(details),
             RuntimeEvent::DockerEvent(event) => self.data.events.push(event),
@@ -212,6 +213,16 @@ impl App {
             };
             counts
         })
+    }
+
+    pub fn memory_summary(&self) -> (u64, u64) {
+        let mut used = 0u64;
+        let mut limit = 0u64;
+        for container in &self.data.containers {
+            used += container.metrics.memory_bytes;
+            limit = limit.max(container.metrics.memory_limit);
+        }
+        (used, limit)
     }
 
     pub async fn enter(&mut self) -> Result<()> {
