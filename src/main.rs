@@ -60,8 +60,7 @@ async fn main() -> Result<()> {
         config = config.validate()?;
     }
     let client = DockerClient::connect(config.docker_socket.clone())?;
-    let (command_tx, mut event_rx, supervisor) =
-        Supervisor::channels(client, config.refresh_ms, config.show_stopped);
+    let (command_tx, mut event_rx, supervisor) = Supervisor::channels(client, config.show_stopped);
     let supervisor_task = tokio::spawn(supervisor.run());
     let mut terminal = TerminalGuard::enter()?;
     let mut app = App::new(config, config_path, command_tx.clone());

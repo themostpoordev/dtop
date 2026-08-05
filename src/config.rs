@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub const MIN_REFRESH_MS: u64 = 50;
+pub const REFRESH_MS: u64 = 500;
 const DEFAULT_SOCKET: &str = "/var/run/docker.sock";
 
 fn default_true() -> bool {
@@ -92,7 +92,6 @@ impl Density {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
     pub docker_socket: String,
-    pub refresh_ms: u64,
     pub theme: ThemeName,
     pub sort: SortOrder,
     pub show_stopped: bool,
@@ -107,7 +106,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             docker_socket: DEFAULT_SOCKET.into(),
-            refresh_ms: 2000,
             theme: ThemeName::Default,
             sort: SortOrder::Cpu,
             show_stopped: true,
@@ -120,11 +118,10 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn validate(mut self) -> Result<Self> {
+    pub fn validate(self) -> Result<Self> {
         if self.docker_socket.trim().is_empty() || !Path::new(&self.docker_socket).is_absolute() {
             anyhow::bail!("docker_socket must be an absolute Unix socket path");
         }
-        self.refresh_ms = self.refresh_ms.max(MIN_REFRESH_MS);
         Ok(self)
     }
 

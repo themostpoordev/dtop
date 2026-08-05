@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, Tabs, Wrap},
+    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Sparkline, Table, Tabs, Wrap},
     Frame,
 };
 
@@ -230,16 +230,26 @@ fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(rows[1]);
 
-    // CPU panel: total % + top services by CPU (bar list).
+    // CPU panel: big % on top, sparkline below, then per-service bars (btop style).
     let cpu_history = app.data.history.as_slice_cpu();
     let cpu_latest = cpu_history.last().copied().unwrap_or(0);
-    let mut cpu_lines = vec![
+    let cpu_top = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(4), Constraint::Length(4), Constraint::Min(6)])
+        .split(main[0]);
+    let big = vec![
         Line::from(Span::styled(
-            format!("total cpu  {cpu_latest}%"),
-            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            format!("{cpu_latest}%"),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         )),
-        Line::from(""),
+        Line::from(Span::styled("total cpu", Style::default().fg(theme.muted))),
     ];
+    frame.render_widget(Paragraph::new(big).block(panel(theme, "CPU")), cpu_top[0]);
+    frame.render_widget(
+        Sparkline::default().data(&cpu_history).max(100).style(Style::default().fg(theme.accent)),
+        cpu_top[1],
+    );
+    let mut cpu_lines = Vec::new();
     let mut top_cpu = app
         .data
         .containers
@@ -258,13 +268,13 @@ fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
             Span::styled(format!(" {percent:5.1}%"), Style::default().fg(theme.text)),
         ]));
     }
-    if cpu_lines.len() <= 2 {
+    if cpu_lines.is_empty() {
         cpu_lines.push(Line::from(Span::styled(
             "no active containers",
             Style::default().fg(theme.muted),
         )));
     }
-    frame.render_widget(Paragraph::new(cpu_lines).block(panel(theme, "CPU")), main[0]);
+    frame.render_widget(Paragraph::new(cpu_lines), cpu_top[2]);
 
     // Memory panel: list + top services by memory.
     let memory = &app.data.host_memory;
@@ -624,7 +634,6 @@ fn resource_rows(app: &App, kind: &str) -> Vec<Row<'static>> {
 fn settings(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let entries = [
         ("Theme", app.config.theme.label().to_owned()),
-        ("Refresh interval", format!("{} ms", app.config.refresh_ms)),
         ("Default sort", app.config.sort.label().to_owned()),
         ("Show stopped", yes_no(app.config.show_stopped)),
         ("Follow logs", yes_no(app.config.follow_logs)),

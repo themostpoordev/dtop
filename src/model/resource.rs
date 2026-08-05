@@ -28,6 +28,28 @@ impl History {
     pub fn as_slice_memory(&self) -> Vec<u64> {
         self.memory.iter().copied().collect()
     }
+
+    /// Smooth the stored series in place with a lightweight EMA so the
+    /// sparkline reads calmly instead of bouncing on every sample.
+    pub fn smooth_cpu(&mut self) {
+        let mut previous = None;
+        for value in self.cpu.iter_mut() {
+            if let Some(prev) = previous {
+                *value = ((*value as f64 * 0.4) + (prev as f64 * 0.6)) as u64;
+            }
+            previous = Some(*value);
+        }
+    }
+
+    pub fn smooth_memory(&mut self) {
+        let mut previous = None;
+        for value in self.memory.iter_mut() {
+            if let Some(prev) = previous {
+                *value = ((*value as f64 * 0.4) + (prev as f64 * 0.6)) as u64;
+            }
+            previous = Some(*value);
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]

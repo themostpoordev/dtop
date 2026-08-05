@@ -15,6 +15,7 @@ use tokio::{
 
 use crate::{
     action::ContainerAction,
+    config::REFRESH_MS,
     docker::{
         container_meta, container_row, details, detect_gpus, event, image, log_output, network,
         raw_stats, read_host_memory, volume, DockerClient, GpuInfo, HostMemory, RawStats,
@@ -35,7 +36,7 @@ const METADATA_CONCURRENCY: usize = 32;
 pub enum RuntimeCommand {
     Refresh,
     RefreshInventory,
-    UpdateSettings { refresh_ms: u64, show_stopped: bool },
+    UpdateSettings { show_stopped: bool },
     Inspect(String),
     Action { id: String, action: ContainerAction },
     SubscribeLogs { id: String, follow: bool },
@@ -81,7 +82,6 @@ pub struct Supervisor {
     events: mpsc::Sender<RuntimeEvent>,
     client: Arc<DockerClient>,
     show_stopped: bool,
-    refresh_ms: u64,
     summaries: Vec<ContainerSummary>,
     metadata: HashMap<String, ContainerMeta>,
     stats: HashMap<String, StatState>,
@@ -92,7 +92,6 @@ pub struct Supervisor {
 impl Supervisor {
     pub fn channels(
         client: DockerClient,
-        refresh_ms: u64,
         show_stopped: bool,
     ) -> (mpsc::Sender<RuntimeCommand>, mpsc::Receiver<RuntimeEvent>, Self) {
         let (command_tx, command_rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -102,7 +101,6 @@ impl Supervisor {
             events: event_tx,
             client: Arc::new(client),
             show_stopped,
-            refresh_ms: refresh_ms.max(50),
             summaries: Vec::new(),
             metadata: HashMap::new(),
             stats: HashMap::new(),
@@ -141,7 +139,6 @@ impl Supervisor {
                             self.apply_stats(work);
                             self.emit(RuntimeEvent::Connection { state: ConnectionState::Connected, message: "Docker daemon connected".into() });
                             self.emit(RuntimeEvent::Snapshot { containers: self.rows() });
-                            self.start_fast(&mut fast_tasks, &mut fast_running);
                         }
                         Ok(Err(error)) => self.emit(RuntimeEvent::Connection { state: classify_error(&error), message: error.to_string() }),
                         Err(error) => self.emit(RuntimeEvent::Error(format!("stats task failed: {error}"))),
@@ -169,10 +166,8 @@ impl Supervisor {
                         if self.summaries.is_empty() { self.start_inventory(&mut inventory_tasks, &mut inventory_running); } else { self.start_fast(&mut fast_tasks, &mut fast_running); }
                     }
                     Some(RuntimeCommand::RefreshInventory) => self.start_inventory(&mut inventory_tasks, &mut inventory_running),
-                    Some(RuntimeCommand::UpdateSettings { refresh_ms, show_stopped }) => {
-                        self.refresh_ms = refresh_ms.max(50);
+                    Some(RuntimeCommand::UpdateSettings { show_stopped }) => {
                         self.show_stopped = show_stopped;
-                        refresh_tick = self.refresh_tick();
                         self.start_inventory(&mut inventory_tasks, &mut inventory_running);
                     }
                     Some(RuntimeCommand::Inspect(id)) => self.inspect(id),
@@ -198,7 +193,7 @@ impl Supervisor {
     }
 
     fn refresh_tick(&self) -> time::Interval {
-        let mut tick = time::interval(Duration::from_millis(self.refresh_ms.max(50)));
+        let mut tick = time::interval(Duration::from_millis(REFRESH_MS));
         tick.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         tick
     }
@@ -231,16 +226,8 @@ impl Supervisor {
         if ids.is_empty() {
             return Vec::new();
         }
-        // At 50ms we want every container sampled as often as possible: use a
-        // large rotating batch so the full set is covered quickly. At slower
-        // rates keep concurrency bounded to avoid hammering the daemon.
-        let budget = if self.refresh_ms <= 100 {
-            STATS_CONCURRENCY * 4
-        } else if self.refresh_ms <= 500 {
-            STATS_CONCURRENCY * 2
-        } else {
-            STATS_CONCURRENCY
-        };
+        // Keep the stats batch bounded to avoid hammering the daemon.
+        let budget = STATS_CONCURRENCY * 2;
         let count = budget.min(ids.len());
         let selected = (0..count)
             .map(|offset| ids[(self.stats_cursor + offset) % ids.len()].clone())

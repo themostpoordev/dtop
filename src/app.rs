@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     action::ContainerAction,
-    config::{Config, SortOrder, ThemeName, MIN_REFRESH_MS},
+    config::{Config, SortOrder, ThemeName},
     model::{AppData, ConnectionState, Screen},
     runtime::{RuntimeCommand, RuntimeEvent},
 };
@@ -142,6 +142,8 @@ impl App {
                     self.data.containers.iter().map(|c| c.metrics.memory_percent()).sum::<f64>();
                 self.data.history.push_cpu(cpu.max(0.0) as u64);
                 self.data.history.push_memory(memory.max(0.0) as u64);
+                self.data.history.smooth_cpu();
+                self.data.history.smooth_memory();
             }
             RuntimeEvent::Inventory { images, volumes, networks, host_memory, gpu } => {
                 self.data.images = images;
@@ -244,9 +246,9 @@ impl App {
             },
             Screen::Containers => self.open_details().await?,
             Screen::Settings => {
-                if self.settings_selection == 8 {
+                if self.settings_selection == 7 {
                     self.save_settings()?;
-                } else if self.settings_selection == 9 {
+                } else if self.settings_selection == 8 {
                     self.config = Config::default();
                     self.notice = Some("settings reset to defaults".into());
                     self.push_settings().await;
@@ -362,7 +364,7 @@ impl App {
     fn move_down(&mut self) {
         match self.screen {
             Screen::Home => self.home_selection = (self.home_selection + 1).min(6),
-            Screen::Settings => self.settings_selection = (self.settings_selection + 1).min(9),
+            Screen::Settings => self.settings_selection = (self.settings_selection + 1).min(8),
             Screen::Containers => {
                 let visible = self.visible_indices();
                 if let Some(position) =
@@ -390,13 +392,7 @@ impl App {
                 self.config.theme =
                     if right { self.config.theme.next() } else { previous_theme(self.config.theme) }
             }
-            1 => {
-                self.config.refresh_ms = if right {
-                    self.config.refresh_ms.saturating_add(50)
-                } else {
-                    self.config.refresh_ms.saturating_sub(50).max(MIN_REFRESH_MS)
-                };
-            }
+            1 => {}
             2 => {
                 self.config.sort =
                     if right { self.config.sort.next() } else { previous_sort(self.config.sort) }
@@ -419,10 +415,7 @@ impl App {
     async fn push_settings(&self) {
         let _ = self
             .command_tx
-            .send(RuntimeCommand::UpdateSettings {
-                refresh_ms: self.config.refresh_ms,
-                show_stopped: self.config.show_stopped,
-            })
+            .send(RuntimeCommand::UpdateSettings { show_stopped: self.config.show_stopped })
             .await;
     }
 }
