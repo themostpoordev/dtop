@@ -126,16 +126,24 @@ pub(super) fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         .containers
         .iter()
         .map(|c| (c.name.clone(), c.metrics.memory_bytes))
+        .filter(|(_, bytes)| *bytes > 0)
         .collect::<Vec<_>>();
     top_mem.sort_by_key(|item| std::cmp::Reverse(item.1));
-    for (name, bytes) in top_mem.into_iter() {
-        if bytes == 0 {
-            continue;
-        }
+    // Keep the services list bounded to the panel height so it never overflows
+    // on hosts with many running containers.
+    let available = main[1].height.saturating_sub(12) as usize;
+    let total_mem_services = top_mem.len();
+    for (name, bytes) in top_mem.into_iter().take(available) {
         mem_lines.push(Line::from(vec![
             Span::styled(format!("{name:<16} "), Style::default().fg(theme.muted)),
             Span::styled(format_bytes(bytes), Style::default().fg(theme.text)),
         ]));
+    }
+    if total_mem_services > available {
+        mem_lines.push(Line::from(Span::styled(
+            format!("+{} more", total_mem_services - available),
+            Style::default().fg(theme.warn),
+        )));
     }
     frame.render_widget(Paragraph::new(mem_lines).block(panel(theme, "memory")), main[1]);
 

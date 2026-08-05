@@ -26,6 +26,7 @@ pub struct App {
     pub log_filter: String,
     pub log_follow: bool,
     pub log_scroll: u16,
+    pub container_scroll: usize,
     pub notice: Option<String>,
     pub confirm: Option<(ContainerAction, String)>,
     pub pending_action: bool,
@@ -55,6 +56,7 @@ impl App {
             log_filter: String::new(),
             log_follow,
             log_scroll: 0,
+            container_scroll: 0,
             notice: None,
             confirm: None,
             pending_action: false,
@@ -353,6 +355,7 @@ impl App {
                 {
                     if position > 0 {
                         self.selected_container = visible[position - 1];
+                        self.container_scroll = self.container_scroll.saturating_sub(1);
                     }
                 }
             }
@@ -370,6 +373,7 @@ impl App {
                 {
                     if position + 1 < visible.len() {
                         self.selected_container = visible[position + 1];
+                        self.container_scroll = self.container_scroll.saturating_add(1);
                     }
                 } else if let Some(first) = visible.first() {
                     self.selected_container = *first;

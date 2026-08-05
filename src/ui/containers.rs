@@ -28,12 +28,17 @@ pub(super) fn containers(frame: &mut Frame, app: &App, area: Rect, theme: Theme)
         chunks[0],
     );
     let headers = ["name", "state", "health", "cpu", "memory", "network", "uptime", "restarts"];
-    let rows = app
-        .visible_indices()
-        .into_iter()
+    let visible = app.visible_indices();
+    let total = visible.len();
+    // Viewport height minus filter bar and table header.
+    let viewport = chunks[1].height.saturating_sub(2) as usize;
+    let start = app.container_scroll.min(total.saturating_sub(viewport));
+    let end = (start + viewport).min(total);
+    let rows = visible[start..end]
+        .iter()
         .map(|index| {
-            let c = &app.data.containers[index];
-            let selected = index == app.selected_container;
+            let c = &app.data.containers[*index];
+            let selected = *index == app.selected_container;
             let style = if selected {
                 Style::default().bg(theme.selected).fg(theme.text)
             } else {
@@ -74,14 +79,17 @@ pub(super) fn containers(frame: &mut Frame, app: &App, area: Rect, theme: Theme)
         Constraint::Length(10),
         Constraint::Length(9),
     ];
-    let table_title =
-        format!("{} containers · sort {}", app.visible_indices().len(), app.config.sort.label());
+    let hidden = total.saturating_sub(end);
+    let mut table_title = format!("{total} containers · sort {}", app.config.sort.label());
+    if start > 0 || hidden > 0 {
+        table_title.push_str(&format!(" · showing {}-{}", start + 1, end));
+    }
     let table = Table::new(rows, widths)
         .header(Row::new(headers).style(theme.title().bg(theme.surface_alt)))
         .block(panel(theme, &table_title))
         .column_spacing(1);
     frame.render_widget(table, chunks[1]);
-    if app.data.containers.is_empty() {
+    if total == 0 {
         empty(frame, chunks[1], "No containers available");
     }
 }

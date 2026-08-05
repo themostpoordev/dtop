@@ -1,128 +1,129 @@
 # dtop
 
-A fast, local-first terminal monitor for Docker. dtop brings the feel of btop to
-your containers: live CPU, memory, network and block-I/O statistics, logs,
-events, images, volumes and networks, with a clean keyboard-driven interface.
+A terminal monitor for the local Docker daemon. Shows your containers the way
+`docker stats` always wanted to, with logs, events, images, volumes and
+networks in one place.
 
-dtop is designed for both small personal hosts and large production-like
-servers. It talks **only** to the local Docker Engine through a Unix socket,
-never to a registry or the internet, and contains **no telemetry**.
+Built in Rust with ratatui + bollard. It talks to Docker over the Unix socket
+only — no registry calls, no telemetry, no remote hosts.
 
-## Features
+## What it does
 
-- Overview dashboard with running/stopped/paused counts and per-container CPU
-- Container table with live CPU, memory, network, block I/O, uptime, restart
-  count and health
-- Searchable and sortable containers (name, CPU, memory, uptime, status)
-- Container details from Docker inspection (secrets are never shown)
-- Live logs with stdout/stderr markers, bounded scrollback, follow and clear
-- Real-time Docker events with a bounded buffer
-- Images, volumes and networks screens
-- Safe container actions only: start, stop, restart, pause, unpause
-  (stop/restart/pause require confirmation)
-- Switchable themes, configurable refresh rate, density and hint settings
-- Graceful handling of missing daemon, permission errors and empty states
-- Local-only: one Unix socket, no telemetry, no remote Docker
+- **Overview** — total CPU with a scrolling history graph, per-service CPU and
+  memory, and host memory split into RAM / zram / swapfile
+- **Containers** — live CPU, memory, network and block I/O, uptime, restart
+  count and health, with search (`/`) and sortable columns
+- **Details** — inspect view of the selected container (ports, mounts,
+  networks, command). Environment values are intentionally not shown
+- **Logs** — stdout/stderr with follow mode and a bounded scrollback
+- **Events** — the daemon's event stream, filtered by container
+- **Images, volumes, networks** — plain lists with an empty state
+- **Safe actions only** — start, stop, restart, pause, unpause. Stop/restart/
+  pause ask for confirmation first. There is no delete, no prune, no exec
 
-## Requirements
+Stats are sampled every 500 ms. That interval is fixed; it is not a setting.
 
-- Linux (or macOS) with Docker Engine
-- A user with access to `/var/run/docker.sock` (usually the `docker` group)
-- Rust 1.88+ to build from source
+## Install
 
-## Build and install
+### Binary (Linux x86_64)
+
+Grab the latest release from
+[GitHub Releases](https://github.com/themostpoordev/dtop/releases):
+
+```sh
+tar xzf dtop-v*.tar.gz
+sudo install -m 0755 dtop /usr/local/bin/dtop
+dtop
+```
+
+### From source
+
+Requires Rust 1.88+.
 
 ```sh
 cargo build --release
 # binary at target/release/dtop
 ```
 
-## Run
+### cargo install
 
 ```sh
-dtop
+cargo install --git https://github.com/themostpoordev/dtop
 ```
 
-By default dtop connects to `/var/run/docker.sock`. Override the socket with
-`--socket`, or use a custom config file with `--config`.
+## Usage
 
 ```sh
+dtop                       # default socket: /var/run/docker.sock
 dtop --socket /run/user/1000/docker.sock
 dtop --config ~/.config/dtop/config.toml
 ```
 
-## Keybindings
+You need access to the Docker socket — usually the `docker` group. If the
+daemon is missing or the socket is not readable, dtop says so and keeps
+running; it does not crash.
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Switch main section |
-| `Esc` | Return to Home |
-| `↑ ↓` | Move selection |
-| `Enter` | Open selection / confirm |
-| `/` | Filter current list (containers, events, logs) |
-| `d` | Open container details |
-| `l` | Open container logs |
-| `s` / `x` / `r` / `p` / `u` | start / stop / restart / pause / unpause |
-| `Space` | Toggle log follow |
-| `c` / `C` | Clear logs / events |
-| `?` or `F1` | Keybinding help |
-| `q` or `Ctrl-C` | Quit |
+| `Tab` | next section |
+| `Esc` | back to Home |
+| `↑` / `↓` | move selection (container list scrolls with you) |
+| `Enter` | open / confirm |
+| `/` | filter current list |
+| `d` | details |
+| `l` | logs |
+| `s` `x` `r` `p` `u` | start / stop / restart / pause / unpause |
+| `Space` | toggle log follow |
+| `c` / `C` | clear logs / events |
+| `q` | quit |
 
 ## Configuration
 
-dtop reads `$XDG_CONFIG_HOME/dtop/config.toml` (default
-`~/.config/dtop/config.toml`). Settings can be edited in-app under the
-**Settings** tab and are saved on exit. See `config/dtop.example.toml` for a
-complete example.
+`~/.config/dtop/config.toml` (or `$XDG_CONFIG_HOME/dtop/config.toml`). Settings
+changed in the app are saved automatically. See `config/dtop.example.toml`.
 
 ```toml
 docker_socket = "/var/run/docker.sock"
-refresh_ms = 1000
-theme = "default"
-sort = "cpu"
+theme = "default"          # default | midnight | amber | mono
+sort = "cpu"               # cpu | memory | uptime | name | status
 show_stopped = true
 follow_logs = true
-density = "comfortable"
+density = "comfortable"    # comfortable | compact
 show_hints = true
+show_gpu = true            # GPU panel only appears when a GPU is detected
 ```
 
-- `refresh_ms` controls how often container stats are sampled. The minimum is
-  **50 ms**. Lower values feel more live but cost more CPU; choose a higher
-  value on large hosts.
-- `theme`: `default`, `midnight`, `amber`, `mono`
-- `sort`: `cpu`, `memory`, `uptime`, `name`, `status`
-- `show_stopped`: include exited/created containers in the list
-- `follow_logs`: automatically follow the latest log lines
-- `density`: `comfortable` or `compact`
-- `show_hints`: show keybinding hints in the footer
+## Layout
 
-## Safety
+```
+src/
+├── main.rs        # CLI, terminal lifecycle, event loop
+├── app.rs         # UI state, navigation, filtering, actions
+├── config.rs      # TOML config, validation, atomic save
+├── docker/        # Docker client, adapter, stats, host memory, GPU probe
+├── model/         # display models, bounded buffers, history
+├── runtime/       # supervisor: polling, log/event streams, reconnect
+├── ui/            # one module per screen + theme
+└── terminal.rs    # raw mode / alternate screen guard
+```
 
-dtop only performs safe container actions: start, stop, restart, pause and
-unpause. Stopping, restarting and pausing require an explicit confirmation.
-There are intentionally no delete, prune, exec or registry operations.
+## Development
 
-Container environment values are never displayed, to avoid leaking secrets.
+```sh
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo build --release
+cargo test --all-targets
+```
 
-## Performance
+CI runs all four on every push and pull request.
 
-- Fast stats path samples a bounded, rotating subset of running containers per
-  refresh; every container is sampled regularly regardless of how many exist.
-- Images, volumes and networks are refreshed on a slower cadence, so a 50 ms
-  refresh interval does not trigger expensive full inventory scans.
-- Logs and events use bounded ring buffers, so memory stays flat even for
-  noisy containers.
-- Concurrent API calls are bounded and non-blocking; the UI never blocks on
-  the Docker daemon.
+## Why no refresh setting
 
-## Troubleshooting
-
-- **Permission denied**: the current user cannot access the Docker socket.
-  Ensure the user is in the `docker` group or run with an accessible socket.
-- **Daemon unavailable**: confirm the Docker Engine is running and that the
-  socket path in Settings (or `--socket`) exists.
-- **No containers listed**: an empty daemon is expected and shown as an empty
-  state; enable `show_stopped` to see exited containers.
+A polling interval that can be lowered to "feels faster" just moves the
+refresh cost onto the daemon. 500 ms keeps the UI responsive without turning
+the socket into a hot loop, and the history graph gives you the recent trend
+without needing a faster tick.
 
 ## License
 
