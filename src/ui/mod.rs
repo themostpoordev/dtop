@@ -1,18 +1,27 @@
+mod containers;
+mod details;
+mod events;
+mod home;
+mod logs;
+mod overview;
+mod resources;
+mod settings;
 mod theme;
 
 pub use theme::Theme;
 
+pub(crate) use home::summary_cards;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Sparkline, Table, Tabs, Wrap},
+    style::Style,
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Tabs},
     Frame,
 };
 
 use crate::{
     app::App,
-    model::{format_bytes, format_rate, ConnectionState, Screen},
+    model::{format_rate, ConnectionState, Screen},
 };
 
 pub fn render(frame: &mut Frame, app: &App) {
@@ -25,22 +34,37 @@ pub fn render(frame: &mut Frame, app: &App) {
         .split(frame.area());
     header(frame, app, outer[0], theme);
     match app.screen {
-        Screen::Home => home(frame, app, outer[1], theme),
-        Screen::Overview => overview(frame, app, outer[1], theme),
-        Screen::Containers => containers(frame, app, outer[1], theme),
-        Screen::Details => details(frame, app, outer[1], theme),
-        Screen::Logs => logs(frame, app, outer[1], theme),
-        Screen::Events => events(frame, app, outer[1], theme),
-        Screen::Images => {
-            resources(frame, app, outer[1], theme, "Images", resource_rows(app, "images"))
-        }
-        Screen::Volumes => {
-            resources(frame, app, outer[1], theme, "Volumes", resource_rows(app, "volumes"))
-        }
-        Screen::Networks => {
-            resources(frame, app, outer[1], theme, "Networks", resource_rows(app, "networks"))
-        }
-        Screen::Settings => settings(frame, app, outer[1], theme),
+        Screen::Home => home::home(frame, app, outer[1], theme),
+        Screen::Overview => overview::overview(frame, app, outer[1], theme),
+        Screen::Containers => containers::containers(frame, app, outer[1], theme),
+        Screen::Details => details::details(frame, app, outer[1], theme),
+        Screen::Logs => logs::logs(frame, app, outer[1], theme),
+        Screen::Events => events::events(frame, app, outer[1], theme),
+        Screen::Images => resources::resources(
+            frame,
+            app,
+            outer[1],
+            theme,
+            "Images",
+            resources::resource_rows(app, "images"),
+        ),
+        Screen::Volumes => resources::resources(
+            frame,
+            app,
+            outer[1],
+            theme,
+            "Volumes",
+            resources::resource_rows(app, "volumes"),
+        ),
+        Screen::Networks => resources::resources(
+            frame,
+            app,
+            outer[1],
+            theme,
+            "Networks",
+            resources::resource_rows(app, "networks"),
+        ),
+        Screen::Settings => settings::settings(frame, app, outer[1], theme),
     }
     footer(frame, app, outer[2], theme);
     if app.confirm.is_some() {
@@ -118,573 +142,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         area,
     );
 }
-fn home(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(area);
-    let left = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Min(6)])
-        .split(chunks[0]);
-    let logo = Paragraph::new(Text::from(vec![
-        Line::from(Span::styled("    ██████╗ ████████╗ ██████╗ ██████╗", theme.title())),
-        Line::from(Span::styled("    ██╔══██╗╚══██╔══╝██╔═══██╗██╔══██╗", theme.title())),
-        Line::from(Span::styled("    ██║  ██║   ██║   ██║   ██║██████╔╝", theme.title())),
-        Line::from(Span::styled("    ██║  ██║   ██║   ██║   ██║██╔═══╝ ", theme.title())),
-        Line::from(Span::styled("    ╚█████╔╝   ██║   ╚██████╔╝██║     ", theme.title())),
-        Line::from(Span::styled("     ╚════╝    ╚═╝    ╚═════╝ ╚═╝     ", theme.title())),
-    ]))
-    .block(panel(theme, "local Docker monitor"));
-    frame.render_widget(logo, left[0]);
-    let items = ["Overview", "Containers", "Events", "Images", "Volumes", "Networks", "Settings"];
-    let selected = app.home_selection.min(items.len() - 1);
-    let list = List::new(
-        items
-            .into_iter()
-            .enumerate()
-            .map(|(i, item)| {
-                ListItem::new(Line::from(vec![
-                    Span::styled(
-                        if i == selected { "› " } else { "  " },
-                        if i == selected {
-                            theme.title()
-                        } else {
-                            Style::default().fg(theme.muted)
-                        },
-                    ),
-                    Span::raw(item),
-                ]))
-                .style(if i == selected {
-                    Style::default().bg(theme.selected)
-                } else {
-                    Style::default()
-                })
-            })
-            .collect::<Vec<_>>(),
-    )
-    .block(panel(theme, "navigate · ↑↓ move · Enter open"));
-    frame.render_widget(list, left[1]);
-    let summary = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(7), Constraint::Min(8)])
-        .split(chunks[1]);
-    summary_cards(frame, app, summary[0], theme);
-    let help = List::new(
-        [
-            "Tab  switch section",
-            "Esc   return home",
-            "Enter open selection",
-            "?     full help",
-            "q     quit",
-        ]
-        .into_iter()
-        .map(ListItem::new)
-        .collect::<Vec<_>>(),
-    )
-    .block(panel(theme, "keybindings"))
-    .style(Style::default().fg(theme.text));
-    frame.render_widget(help, summary[1]);
-}
-fn summary_cards(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-            Constraint::Percentage(34),
-        ])
-        .split(area);
-    let counts = app.counts();
-    for (index, (label, value, color)) in [
-        ("running", counts.0, theme.good),
-        ("stopped", counts.1, theme.muted),
-        ("paused", counts.2, theme.warn),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let text = vec![
-            Line::from(Span::styled(
-                value.to_string(),
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(label, Style::default().fg(theme.muted))),
-        ];
-        frame.render_widget(
-            Paragraph::new(text)
-                .alignment(ratatui::layout::Alignment::Center)
-                .block(panel(theme, "")),
-            chunks[index],
-        );
-    }
-}
-fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Min(12), Constraint::Min(6)])
-        .split(area);
-    summary_cards(frame, app, rows[0], theme);
-    let main = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(rows[1]);
 
-    // CPU panel: big % + scrolling sparkline + per-service bars (btop style).
-    let cpu_history = app.data.history.as_slice_cpu();
-    let cpu_latest = cpu_history.last().copied().unwrap_or(0);
-    let cpu_top = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(4), Constraint::Length(6), Constraint::Min(4)])
-        .split(main[0]);
-    let big = vec![
-        Line::from(Span::styled(
-            format!("{cpu_latest}%"),
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled("total cpu", Style::default().fg(theme.muted))),
-    ];
-    frame.render_widget(Paragraph::new(big).block(panel(theme, "CPU")), cpu_top[0]);
-    frame.render_widget(
-        Sparkline::default().data(&cpu_history).max(100).style(Style::default().fg(theme.accent)),
-        cpu_top[1],
-    );
-    let mut cpu_lines = Vec::new();
-    let mut top_cpu = app
-        .data
-        .containers
-        .iter()
-        .map(|c| (c.name.clone(), c.metrics.cpu_percent))
-        .collect::<Vec<_>>();
-    top_cpu.sort_by(|a, b| b.1.total_cmp(&a.1));
-    for (name, percent) in top_cpu.into_iter().take(8) {
-        if percent <= 0.0 {
-            continue;
-        }
-        let bar_len = ((percent / 100.0) * 20.0) as usize;
-        cpu_lines.push(Line::from(vec![
-            Span::styled(format!("{name:<16} "), Style::default().fg(theme.muted)),
-            Span::styled("█".repeat(bar_len), Style::default().fg(theme.accent)),
-            Span::styled(format!(" {percent:5.1}%"), Style::default().fg(theme.text)),
-        ]));
-    }
-    if cpu_lines.is_empty() {
-        cpu_lines.push(Line::from(Span::styled(
-            "no active containers",
-            Style::default().fg(theme.muted),
-        )));
-    }
-    frame.render_widget(Paragraph::new(cpu_lines), cpu_top[2]);
-
-    // Memory panel: list + top services by memory.
-    let memory = &app.data.host_memory;
-    let mut mem_lines = Vec::new();
-    let ram_percent = if memory.ram_total > 0 {
-        (memory.ram_used as f64 / memory.ram_total as f64) * 100.0
-    } else {
-        0.0
-    };
-    mem_lines.push(Line::from(vec![
-        Span::styled("RAM       ", Style::default().fg(theme.muted)),
-        Span::styled(
-            format!("{}/{}", format_bytes(memory.ram_used), format_bytes(memory.ram_total)),
-            Style::default().fg(theme.text),
-        ),
-        Span::styled(format!("  {ram_percent:.0}%"), Style::default().fg(theme.good)),
-    ]));
-    let mut add_mem_row = |label: &str, used: u64, total: u64, color: ratatui::style::Color| {
-        let percent = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
-        mem_lines.push(Line::from(vec![
-            Span::styled(format!("{label:<9}"), Style::default().fg(theme.muted)),
-            Span::styled(
-                format!("{}/{}", format_bytes(used), format_bytes(total)),
-                Style::default().fg(theme.text),
-            ),
-            Span::styled(format!("  {percent:.0}%"), Style::default().fg(color)),
-        ]));
-    };
-    add_mem_row("zram", memory.zram_used, memory.zram_total, theme.warn);
-    add_mem_row("swapfile", memory.swapfile_used, memory.swapfile_total, theme.warn);
-    if memory.zram_total == 0 {
-        mem_lines
-            .push(Line::from(Span::styled("zram: not present", Style::default().fg(theme.muted))));
-    }
-    if memory.swapfile_total == 0 {
-        mem_lines.push(Line::from(Span::styled(
-            "swapfile: not present",
-            Style::default().fg(theme.muted),
-        )));
-    }
-    let used_sum = memory.ram_used + memory.zram_used + memory.swapfile_used;
-    let total_sum = memory.ram_total + memory.zram_total + memory.swapfile_total;
-    let total_percent =
-        if total_sum > 0 { (used_sum as f64 / total_sum as f64) * 100.0 } else { 0.0 };
-    mem_lines.push(Line::from(""));
-    mem_lines.push(Line::from(vec![
-        Span::styled("total     ", Style::default().fg(theme.muted)),
-        Span::styled(
-            format!("{}/{}", format_bytes(used_sum), format_bytes(total_sum)),
-            Style::default().fg(theme.text),
-        ),
-        Span::styled(format!("  {total_percent:.0}%"), Style::default().fg(theme.good)),
-    ]));
-    mem_lines.push(Line::from(""));
-    mem_lines.push(Line::from(Span::styled("services", Style::default().fg(theme.muted))));
-    let mut top_mem = app
-        .data
-        .containers
-        .iter()
-        .map(|c| (c.name.clone(), c.metrics.memory_bytes))
-        .collect::<Vec<_>>();
-    top_mem.sort_by_key(|item| std::cmp::Reverse(item.1));
-    for (name, bytes) in top_mem.into_iter() {
-        if bytes == 0 {
-            continue;
-        }
-        mem_lines.push(Line::from(vec![
-            Span::styled(format!("{name:<16} "), Style::default().fg(theme.muted)),
-            Span::styled(format_bytes(bytes), Style::default().fg(theme.text)),
-        ]));
-    }
-    frame.render_widget(Paragraph::new(mem_lines).block(panel(theme, "memory")), main[1]);
-
-    let recent = app
-        .data
-        .events
-        .items
-        .iter()
-        .rev()
-        .take(8)
-        .map(|event| {
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{} ", event.time()), Style::default().fg(theme.muted)),
-                Span::styled(
-                    format!("{} {}", event.kind, event.action),
-                    Style::default().fg(theme.text),
-                ),
-            ]))
-        })
-        .collect::<Vec<_>>();
-    frame.render_widget(List::new(recent).block(panel(theme, "recent events")), rows[2]);
-}
-fn containers(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(6)])
-        .split(area);
-    let filter = if app.filter_mode {
-        format!("filter: {}_", app.filter)
-    } else if app.filter.is_empty() {
-        "filter: none · / to search".into()
-    } else {
-        format!("filter: {} · / edit", app.filter)
-    };
-    frame.render_widget(
-        Paragraph::new(filter)
-            .style(Style::default().fg(if app.filter_mode { theme.accent } else { theme.muted }))
-            .block(panel(theme, "containers")),
-        chunks[0],
-    );
-    let headers = ["name", "state", "health", "cpu", "memory", "network", "uptime", "restarts"];
-    let rows = app
-        .visible_indices()
-        .into_iter()
-        .map(|index| {
-            let c = &app.data.containers[index];
-            let selected = index == app.selected_container;
-            let style = if selected {
-                Style::default().bg(theme.selected).fg(theme.text)
-            } else {
-                Style::default().fg(theme.text)
-            };
-            Row::new(
-                [
-                    c.name.clone(),
-                    c.state.clone(),
-                    c.health.clone(),
-                    format!("{:.1}%", c.metrics.cpu_percent),
-                    format!(
-                        "{} / {}",
-                        format_bytes(c.metrics.memory_bytes),
-                        format_bytes(c.metrics.memory_limit)
-                    ),
-                    format!(
-                        "↓{} ↑{}",
-                        format_rate(c.delta.network_rx_rate),
-                        format_rate(c.delta.network_tx_rate)
-                    ),
-                    c.uptime(),
-                    c.restart_count.to_string(),
-                ]
-                .into_iter()
-                .map(Cell::from),
-            )
-            .style(style)
-        })
-        .collect::<Vec<_>>();
-    let widths = [
-        Constraint::Percentage(18),
-        Constraint::Length(10),
-        Constraint::Length(10),
-        Constraint::Length(9),
-        Constraint::Length(22),
-        Constraint::Length(26),
-        Constraint::Length(10),
-        Constraint::Length(9),
-    ];
-    let table_title =
-        format!("{} containers · sort {}", app.visible_indices().len(), app.config.sort.label());
-    let table = Table::new(rows, widths)
-        .header(Row::new(headers).style(theme.title().bg(theme.surface_alt)))
-        .block(panel(theme, &table_title))
-        .column_spacing(1);
-    frame.render_widget(table, chunks[1]);
-    if app.data.containers.is_empty() {
-        empty(frame, chunks[1], "No containers available");
-    }
-}
-fn details(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
-    let Some(details) = &app.data.details else {
-        empty(frame, area, "Select a container and press Enter");
-        return;
-    };
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(48), Constraint::Percentage(52)])
-        .split(area);
-    let left = [
-        format!("name       {}", details.name),
-        format!("id         {}", details.id),
-        format!("image      {}", details.image),
-        format!("status     {}", details.status),
-        format!("health     {}", details.health),
-        format!("restarts   {}", details.restart_count),
-        format!("created    {}", details.created),
-        format!("started    {}", details.started),
-    ];
-    frame.render_widget(
-        Paragraph::new(left.join("\n"))
-            .block(panel(theme, "container details"))
-            .wrap(Wrap { trim: true }),
-        chunks[0],
-    );
-    let ports = if details.ports.is_empty() { "none".to_owned() } else { details.ports.join("\n") };
-    let mounts =
-        if details.mounts.is_empty() { "none".to_owned() } else { details.mounts.join("\n") };
-    let networks =
-        if details.networks.is_empty() { "none".to_owned() } else { details.networks.join("\n") };
-    let right = [
-        format!("command\n{}", details.command),
-        format!("ports\n{ports}"),
-        format!("mounts\n{mounts}"),
-        format!("networks\n{networks}"),
-    ];
-    frame.render_widget(
-        Paragraph::new(right.join("\n\n"))
-            .block(panel(theme, "runtime metadata"))
-            .wrap(Wrap { trim: true }),
-        chunks[1],
-    );
-}
-fn logs(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
-    let lines = app
-        .data
-        .logs
-        .items
-        .iter()
-        .filter(|line| {
-            app.log_filter.is_empty()
-                || line.text.to_ascii_lowercase().contains(&app.log_filter.to_ascii_lowercase())
-        })
-        .map(|line| {
-            let color = match line.stream {
-                crate::model::LogStream::Stderr => theme.warn,
-                _ => theme.text,
-            };
-            Line::from(Span::styled(line.text.trim_end_matches('\n'), Style::default().fg(color)))
-        })
-        .collect::<Vec<_>>();
-    let title = if app.log_follow { "logs · following" } else { "logs · paused" };
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(panel(theme, title))
-            .scroll((app.log_scroll, 0))
-            .wrap(Wrap { trim: false }),
-        area,
-    );
-}
-fn events(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
-    let rows = app
-        .data
-        .events
-        .items
-        .iter()
-        .rev()
-        .filter(|event| {
-            app.event_filter.is_empty()
-                || format!("{} {} {}", event.kind, event.action, event.actor)
-                    .to_ascii_lowercase()
-                    .contains(&app.event_filter.to_ascii_lowercase())
-        })
-        .map(|event| {
-            Row::new([
-                event.time(),
-                event.kind.clone(),
-                event.action.clone(),
-                event.actor.chars().take(16).collect(),
-                event.attributes.clone(),
-            ])
-        })
-        .collect::<Vec<_>>();
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(10),
-            Constraint::Length(12),
-            Constraint::Length(16),
-            Constraint::Length(18),
-            Constraint::Min(20),
-        ],
-    )
-    .header(
-        Row::new(["when", "type", "action", "actor", "attributes"])
-            .style(theme.title().bg(theme.surface_alt)),
-    )
-    .block(panel(theme, "Docker events"));
-    frame.render_widget(table, area);
-}
-fn resources(
-    frame: &mut Frame,
-    _app: &App,
-    area: Rect,
-    theme: Theme,
-    title: &str,
-    rows: Vec<Row<'static>>,
-) {
-    if rows.is_empty() {
-        empty(
-            frame,
-            area,
-            &format!("No {title_lower} available", title_lower = title.to_ascii_lowercase()),
-        );
-        return;
-    }
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Percentage(35),
-            Constraint::Percentage(30),
-            Constraint::Percentage(20),
-            Constraint::Percentage(15),
-        ],
-    )
-    .header(
-        Row::new(["name", "detail", "size", "scope"]).style(theme.title().bg(theme.surface_alt)),
-    )
-    .block(panel(theme, title));
-    frame.render_widget(table, area);
-}
-fn resource_rows(app: &App, kind: &str) -> Vec<Row<'static>> {
-    match kind {
-        "images" => app
-            .data
-            .images
-            .iter()
-            .map(|image| {
-                Row::new([
-                    image
-                        .tags
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| image.id.chars().take(16).collect()),
-                    image.id.chars().take(24).collect(),
-                    format_bytes(image.size_bytes),
-                    image.created.to_string(),
-                ])
-            })
-            .collect(),
-        "volumes" => app
-            .data
-            .volumes
-            .iter()
-            .map(|volume| {
-                Row::new([
-                    volume.name.clone(),
-                    volume.driver.clone(),
-                    volume.mountpoint.clone(),
-                    volume.scope.clone(),
-                ])
-            })
-            .collect(),
-        _ => app
-            .data
-            .networks
-            .iter()
-            .map(|network| {
-                Row::new([
-                    network.name.clone(),
-                    network.driver.clone(),
-                    network.containers.to_string(),
-                    network.scope.clone(),
-                ])
-            })
-            .collect(),
-    }
-}
-fn settings(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
-    let entries = [
-        ("Theme", app.config.theme.label().to_owned()),
-        ("Default sort", app.config.sort.label().to_owned()),
-        ("Show stopped", yes_no(app.config.show_stopped)),
-        ("Follow logs", yes_no(app.config.follow_logs)),
-        ("Density", app.config.density.label().to_owned()),
-        ("Keybinding hints", yes_no(app.config.show_hints)),
-        ("Show GPU status", yes_no(app.config.show_gpu)),
-        ("Save settings", "Enter".into()),
-        ("Reset defaults", "Enter".into()),
-    ];
-    let rows = entries
-        .into_iter()
-        .enumerate()
-        .map(|(index, (label, value))| {
-            let style = if index == app.settings_selection {
-                Style::default().bg(theme.selected).fg(theme.text)
-            } else {
-                Style::default().fg(theme.text)
-            };
-            Row::new([
-                if index == app.settings_selection {
-                    format!("› {label}")
-                } else {
-                    format!("  {label}")
-                },
-                value,
-            ])
-            .style(style)
-        })
-        .collect::<Vec<_>>();
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-        .split(area);
-    frame.render_widget(
-        Table::new(rows, [Constraint::Percentage(65), Constraint::Percentage(35)])
-            .block(panel(theme, "settings · ←→ change · Enter save")),
-        chunks[0],
-    );
-    let copy = vec![
-        Line::from(Span::styled("local-only by design", theme.title())),
-        Line::from("Docker requests use only the configured Unix socket."),
-        Line::from("No telemetry, registry calls, or environment values."),
-        Line::from(""),
-        Line::from(Span::styled("minimum refresh", Style::default().fg(theme.muted))),
-        Line::from("50 ms"),
-    ];
-    frame.render_widget(
-        Paragraph::new(copy).block(panel(theme, "notes")).wrap(Wrap { trim: true }),
-        chunks[1],
-    );
-}
 fn confirmation(frame: &mut Frame, app: &App, theme: Theme) {
     let area = centered_rect(60, 30, frame.area());
     let action = app
@@ -710,6 +168,7 @@ fn confirmation(frame: &mut Frame, app: &App, theme: Theme) {
         area,
     );
 }
+
 fn empty(frame: &mut Frame, area: Rect, message: &str) {
     frame.render_widget(
         Paragraph::new(message)
@@ -718,6 +177,7 @@ fn empty(frame: &mut Frame, area: Rect, message: &str) {
         area,
     );
 }
+
 fn panel<'a>(theme: Theme, title: &'a str) -> Block<'a> {
     Block::default()
         .title(format!(" {title} "))
@@ -725,6 +185,7 @@ fn panel<'a>(theme: Theme, title: &'a str) -> Block<'a> {
         .border_style(Style::default().fg(theme.border))
         .style(theme.panel())
 }
+
 fn yes_no(value: bool) -> String {
     if value {
         "yes".into()
@@ -732,6 +193,7 @@ fn yes_no(value: bool) -> String {
         "no".into()
     }
 }
+
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let vertical = Layout::default()
         .direction(Direction::Vertical)

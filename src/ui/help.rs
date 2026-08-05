@@ -1,1 +1,0 @@
-pub const KEYBINDINGS: &[(&str, &str)] = &[("Tab", "switch main section"), ("Esc", "home/help"), ("↑ ↓", "move selection"), ("Enter", "open / confirm"), ("/", "filter"), ("d", "details"), ("l", "logs"), ("s x r p u", "safe container actions"), ("q", "quit")];
