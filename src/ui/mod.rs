@@ -230,12 +230,12 @@ fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(rows[1]);
 
-    // CPU panel: big % on top, sparkline below, then per-service bars (btop style).
+    // CPU panel: big % + scrolling sparkline + per-service bars (btop style).
     let cpu_history = app.data.history.as_slice_cpu();
     let cpu_latest = cpu_history.last().copied().unwrap_or(0);
     let cpu_top = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(4), Constraint::Length(4), Constraint::Min(6)])
+        .constraints([Constraint::Length(4), Constraint::Length(6), Constraint::Min(4)])
         .split(main[0]);
     let big = vec![
         Line::from(Span::styled(

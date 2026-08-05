@@ -142,8 +142,6 @@ impl App {
                     self.data.containers.iter().map(|c| c.metrics.memory_percent()).sum::<f64>();
                 self.data.history.push_cpu(cpu.max(0.0) as u64);
                 self.data.history.push_memory(memory.max(0.0) as u64);
-                self.data.history.smooth_cpu();
-                self.data.history.smooth_memory();
             }
             RuntimeEvent::Inventory { images, volumes, networks, host_memory, gpu } => {
                 self.data.images = images;

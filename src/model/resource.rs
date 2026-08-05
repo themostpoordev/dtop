@@ -4,51 +4,46 @@ use std::collections::VecDeque;
 pub struct History {
     pub cpu: VecDeque<u64>,
     pub memory: VecDeque<u64>,
+    cpu_smoothed: Option<f64>,
+    memory_smoothed: Option<f64>,
 }
 
 impl History {
     pub fn new() -> Self {
-        Self { cpu: VecDeque::with_capacity(120), memory: VecDeque::with_capacity(120) }
+        Self {
+            cpu: VecDeque::with_capacity(120),
+            memory: VecDeque::with_capacity(120),
+            cpu_smoothed: None,
+            memory_smoothed: None,
+        }
     }
     pub fn push_cpu(&mut self, value: u64) {
+        let smoothed = match self.cpu_smoothed {
+            Some(prev) => (value as f64 * 0.4) + (prev * 0.6),
+            None => value as f64,
+        };
+        self.cpu_smoothed = Some(smoothed);
         if self.cpu.len() == 120 {
             self.cpu.pop_front();
         }
-        self.cpu.push_back(value);
+        self.cpu.push_back(smoothed as u64);
     }
     pub fn push_memory(&mut self, value: u64) {
+        let smoothed = match self.memory_smoothed {
+            Some(prev) => (value as f64 * 0.4) + (prev * 0.6),
+            None => value as f64,
+        };
+        self.memory_smoothed = Some(smoothed);
         if self.memory.len() == 120 {
             self.memory.pop_front();
         }
-        self.memory.push_back(value);
+        self.memory.push_back(smoothed as u64);
     }
     pub fn as_slice_cpu(&self) -> Vec<u64> {
         self.cpu.iter().copied().collect()
     }
     pub fn as_slice_memory(&self) -> Vec<u64> {
         self.memory.iter().copied().collect()
-    }
-
-    /// Smooth the stored series in place with a lightweight EMA so the
-    /// sparkline reads calmly instead of bouncing on every sample.
-    pub fn smooth_cpu(&mut self) {
-        let mut previous = None;
-        for value in self.cpu.iter_mut() {
-            if let Some(prev) = previous {
-                *value = ((*value as f64 * 0.4) + (prev as f64 * 0.6)) as u64;
-            }
-            previous = Some(*value);
-        }
-    }
-
-    pub fn smooth_memory(&mut self) {
-        let mut previous = None;
-        for value in self.memory.iter_mut() {
-            if let Some(prev) = previous {
-                *value = ((*value as f64 * 0.4) + (prev as f64 * 0.6)) as u64;
-            }
-            previous = Some(*value);
-        }
     }
 }
 
