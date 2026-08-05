@@ -1,19 +1,18 @@
 #![forbid(unsafe_code)]
 
-use std::{env, path::PathBuf, time::Duration};
+use std::{env, path::PathBuf};
 
 use anyhow::{Context, Result};
 use crossterm::event::{Event as CEvent, EventStream, KeyEventKind};
 use dtop::{
     app::App,
     config::Config,
-    docker::DockerClient,
     runtime::{RuntimeCommand, RuntimeEvent, Supervisor},
     terminal::TerminalGuard,
     ui,
 };
 use futures_util::StreamExt;
-use tokio::{signal, time};
+use tokio::signal;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Default)]
@@ -59,12 +58,15 @@ async fn main() -> Result<()> {
         config.docker_socket = socket;
         config = config.validate()?;
     }
-    let client = DockerClient::connect(config.docker_socket.clone())?;
-    let (command_tx, mut event_rx, supervisor) = Supervisor::channels(client, config.show_stopped);
-    let supervisor_task = tokio::spawn(supervisor.run());
+
+    // Enter the TUI first so the app starts fast and shows connection state
+    // in the UI instead of exiting when the daemon is down.
     let mut terminal = TerminalGuard::enter()?;
+    let (command_tx, mut event_rx, supervisor) = Supervisor::channels(config.show_stopped);
+    let supervisor_task = tokio::spawn(supervisor.run());
+    let socket = config.docker_socket.clone();
     let mut app = App::new(config, config_path, command_tx.clone());
-    command_tx.send(RuntimeCommand::Refresh).await.ok();
+    command_tx.send(RuntimeCommand::Connect(socket)).await.ok();
     let result = run_loop(&mut terminal, &mut app, &mut event_rx).await;
     let _ = app.config.save(&app.config_path);
     command_tx.send(RuntimeCommand::Shutdown).await.ok();
@@ -77,28 +79,32 @@ async fn run_loop(
     app: &mut App,
     event_rx: &mut tokio::sync::mpsc::Receiver<RuntimeEvent>,
 ) -> Result<()> {
-    let mut tick = time::interval(Duration::from_millis(16));
-    tick.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     let mut keys = EventStream::new();
+    let mut dirty = true;
     loop {
         tokio::select! {
-            _ = tick.tick() => {
+            _ = event_rx.recv() => {
                 while let Ok(event) = event_rx.try_recv() {
                     app.apply_runtime_event(event);
                 }
-                terminal.terminal.draw(|frame| ui::render(frame, app)).context("render terminal")?;
-                if app.should_quit {
-                    break;
-                }
+                dirty = true;
             }
-            _ = signal::ctrl_c() => app.should_quit = true,
+            _ = signal::ctrl_c() => { app.should_quit = true; dirty = true; }
             maybe_event = keys.next() => {
                 if let Some(Ok(CEvent::Key(key))) = maybe_event {
                     if key.kind == KeyEventKind::Press {
                         app.handle_key(key).await?;
+                        dirty = true;
                     }
                 }
             }
+        }
+        if dirty {
+            terminal.terminal.draw(|frame| ui::render(frame, app)).context("render terminal")?;
+            dirty = false;
+        }
+        if app.should_quit {
+            break;
         }
     }
     Ok(())

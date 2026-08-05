@@ -34,6 +34,7 @@ const METADATA_CONCURRENCY: usize = 32;
 
 #[derive(Debug)]
 pub enum RuntimeCommand {
+    Connect(String),
     Refresh,
     RefreshInventory,
     UpdateSettings { show_stopped: bool },
@@ -80,7 +81,8 @@ struct StatState {
 pub struct Supervisor {
     commands: mpsc::Receiver<RuntimeCommand>,
     events: mpsc::Sender<RuntimeEvent>,
-    client: Arc<DockerClient>,
+    client: Option<Arc<DockerClient>>,
+    socket: Option<String>,
     show_stopped: bool,
     summaries: Vec<ContainerSummary>,
     metadata: HashMap<String, ContainerMeta>,
@@ -91,7 +93,6 @@ pub struct Supervisor {
 
 impl Supervisor {
     pub fn channels(
-        client: DockerClient,
         show_stopped: bool,
     ) -> (mpsc::Sender<RuntimeCommand>, mpsc::Receiver<RuntimeEvent>, Self) {
         let (command_tx, command_rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -99,7 +100,8 @@ impl Supervisor {
         let supervisor = Self {
             commands: command_rx,
             events: event_tx,
-            client: Arc::new(client),
+            client: None,
+            socket: None,
             show_stopped,
             summaries: Vec::new(),
             metadata: HashMap::new(),
@@ -119,19 +121,20 @@ impl Supervisor {
         let mut fast_running = false;
         let mut inventory_running = false;
         let mut log_task: Option<AbortHandle> = None;
-        let event_task = self.spawn_event_worker();
+        let mut event_task: Option<AbortHandle> = None;
+        let mut connect_tick = time::interval(Duration::from_secs(3));
+        connect_tick.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
         self.emit(RuntimeEvent::Connection {
             state: ConnectionState::Connecting,
-            message: format!("connecting to {}", self.client.socket),
+            message: "waiting for Docker socket".into(),
         });
-        self.start_inventory(&mut inventory_tasks, &mut inventory_running);
-        self.start_fast(&mut fast_tasks, &mut fast_running);
 
         loop {
             tokio::select! {
-                _ = refresh_tick.tick(), if !fast_running => self.start_fast(&mut fast_tasks, &mut fast_running),
-                _ = inventory_tick.tick(), if !inventory_running => self.start_inventory(&mut inventory_tasks, &mut inventory_running),
+                _ = connect_tick.tick(), if self.client.is_none() => self.try_connect(&mut event_task, &mut fast_tasks, &mut fast_running, &mut inventory_tasks, &mut inventory_running),
+                _ = refresh_tick.tick(), if !fast_running && self.client.is_some() => self.start_fast(&mut fast_tasks, &mut fast_running),
+                _ = inventory_tick.tick(), if !inventory_running && self.client.is_some() => self.start_inventory(&mut inventory_tasks, &mut inventory_running),
                 Some(result) = fast_tasks.join_next(), if fast_running => {
                     fast_running = false;
                     match result {
@@ -162,8 +165,12 @@ impl Supervisor {
                     }
                 }
                 command = self.commands.recv() => match command {
+                    Some(RuntimeCommand::Connect(socket)) => {
+                        self.socket = Some(socket);
+                        self.try_connect(&mut event_task, &mut fast_tasks, &mut fast_running, &mut inventory_tasks, &mut inventory_running);
+                    }
                     Some(RuntimeCommand::Refresh) => {
-                        if self.summaries.is_empty() { self.start_inventory(&mut inventory_tasks, &mut inventory_running); } else { self.start_fast(&mut fast_tasks, &mut fast_running); }
+                        if self.client.is_none() { self.try_connect(&mut event_task, &mut fast_tasks, &mut fast_running, &mut inventory_tasks, &mut inventory_running); } else if self.summaries.is_empty() { self.start_inventory(&mut inventory_tasks, &mut inventory_running); } else { self.start_fast(&mut fast_tasks, &mut fast_running); }
                     }
                     Some(RuntimeCommand::RefreshInventory) => self.start_inventory(&mut inventory_tasks, &mut inventory_running),
                     Some(RuntimeCommand::UpdateSettings { show_stopped }) => {
@@ -182,12 +189,39 @@ impl Supervisor {
                     Some(RuntimeCommand::UnsubscribeLogs) => { if let Some(handle) = log_task.take() { handle.abort(); } }
                     Some(RuntimeCommand::Shutdown) | None => {
                         if let Some(handle) = log_task.take() { handle.abort(); }
-                        event_task.abort();
+                        if let Some(handle) = event_task.take() { handle.abort(); }
                         fast_tasks.abort_all();
                         inventory_tasks.abort_all();
                         break;
                     }
                 }
+            }
+        }
+    }
+
+    fn try_connect(
+        &mut self,
+        event_task: &mut Option<AbortHandle>,
+        fast_tasks: &mut JoinSet<Result<FastWork>>,
+        fast_running: &mut bool,
+        inventory_tasks: &mut JoinSet<Result<InventoryWork>>,
+        inventory_running: &mut bool,
+    ) {
+        let Some(socket) = self.socket.clone() else { return };
+        match DockerClient::connect(socket.clone()) {
+            Ok(client) => {
+                self.client = Some(Arc::new(client));
+                if event_task.is_none() {
+                    *event_task = Some(self.spawn_event_worker());
+                }
+                self.start_inventory(inventory_tasks, inventory_running);
+                self.start_fast(fast_tasks, fast_running);
+            }
+            Err(error) => {
+                self.emit(RuntimeEvent::Connection {
+                    state: classify_error(&error),
+                    message: error.to_string(),
+                });
             }
         }
     }
@@ -206,8 +240,9 @@ impl Supervisor {
         if ids.is_empty() {
             return;
         }
+        let Some(client) = &self.client else { return };
         *running = true;
-        let client = Arc::clone(&self.client);
+        let client = Arc::clone(client);
         tasks.spawn(async move { collect_fast(client, ids).await });
     }
 
@@ -215,8 +250,9 @@ impl Supervisor {
         if *running {
             return;
         }
+        let Some(client) = &self.client else { return };
         *running = true;
-        let client = Arc::clone(&self.client);
+        let client = Arc::clone(client);
         let show_stopped = self.show_stopped;
         tasks.spawn(async move { collect_inventory(client, show_stopped).await });
     }
@@ -268,7 +304,8 @@ impl Supervisor {
     }
 
     fn inspect(&self, id: String) {
-        let client = Arc::clone(&self.client);
+        let Some(client) = &self.client else { return };
+        let client = Arc::clone(client);
         let events = self.events.clone();
         tokio::spawn(async move {
             match client.inspect(&id).await {
@@ -283,7 +320,8 @@ impl Supervisor {
         });
     }
     fn action(&self, id: String, action: ContainerAction) {
-        let client = Arc::clone(&self.client);
+        let Some(client) = &self.client else { return };
+        let client = Arc::clone(client);
         let events = self.events.clone();
         tokio::spawn(async move {
             match client.action(&id, action).await {
@@ -301,7 +339,8 @@ impl Supervisor {
     }
 
     fn spawn_event_worker(&self) -> AbortHandle {
-        let client = Arc::clone(&self.client);
+        let Some(client) = &self.client else { return tokio::spawn(async {}).abort_handle() };
+        let client = Arc::clone(client);
         let events = self.events.clone();
         tokio::spawn(async move {
             loop {
@@ -329,7 +368,8 @@ impl Supervisor {
     }
 
     fn spawn_log_worker(&self, id: String, follow: bool) -> AbortHandle {
-        let client = Arc::clone(&self.client);
+        let Some(client) = &self.client else { return tokio::spawn(async {}).abort_handle() };
+        let client = Arc::clone(client);
         let events = self.events.clone();
         tokio::spawn(async move {
             let mut stream = client.logs(&id, follow);
