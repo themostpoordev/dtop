@@ -12,6 +12,7 @@ use super::{panel, yes_no, Theme};
 
 pub(super) fn settings(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let entries = [
+        ("Mode", app.config.mode.label().to_owned()),
         ("Theme", app.config.theme.label().to_owned()),
         ("Default sort", app.config.sort.label().to_owned()),
         ("Show stopped", yes_no(app.config.show_stopped)),

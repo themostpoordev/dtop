@@ -82,7 +82,7 @@ impl App {
                 self.screen = Screen::Home;
                 self.command_tx.send(RuntimeCommand::UnsubscribeLogs).await.ok();
             }
-            KeyCode::Tab => self.screen = self.screen.next_primary(),
+            KeyCode::Tab => self.screen = self.screen.next_primary(self.config.mode),
             KeyCode::Char('?') | KeyCode::F(1) => {
                 self.notice =
                     Some("Tab sections · Esc home · arrows select · Enter open · q quit".into())
@@ -144,6 +144,22 @@ impl App {
                     self.data.containers.iter().map(|c| c.metrics.memory_percent()).sum::<f64>();
                 self.data.history.push_cpu(cpu.max(0.0) as u64);
                 self.data.history.push_memory(memory.max(0.0) as u64);
+            }
+            RuntimeEvent::HostSnapshot { host } => {
+                self.data.host = host.clone();
+                // The sampler is fresher than the 30 s inventory copy.
+                self.data.host_memory = host.memory.clone();
+                let total = host.memory.total().max(1);
+                let mem_pct = host.memory.used() * 100 / total;
+                self.data.host_history.cpu.push_cpu(host.cpu_total.max(0.0) as u64);
+                self.data.host_history.cpu.push_memory(mem_pct);
+                self.data.host_history.disk_read.push(host.disks.iter().map(|d| d.read_rate).sum());
+                self.data
+                    .host_history
+                    .disk_write
+                    .push(host.disks.iter().map(|d| d.write_rate).sum());
+                self.data.host_history.net_rx.push(host.nets.iter().map(|n| n.rx_rate).sum());
+                self.data.host_history.net_tx.push(host.nets.iter().map(|n| n.tx_rate).sum());
             }
             RuntimeEvent::Inventory { images, volumes, networks, host_memory, gpu } => {
                 self.data.images = images;
@@ -235,20 +251,15 @@ impl App {
 
     pub async fn enter(&mut self) -> Result<()> {
         match self.screen {
-            Screen::Home => match self.home_selection {
-                0 => self.screen = Screen::Overview,
-                1 => self.screen = Screen::Containers,
-                2 => self.screen = Screen::Events,
-                3 => self.screen = Screen::Images,
-                4 => self.screen = Screen::Volumes,
-                5 => self.screen = Screen::Networks,
-                _ => self.screen = Screen::Settings,
-            },
+            Screen::Home => {
+                let primary = Screen::primary(self.config.mode);
+                self.screen = primary[self.home_selection.min(primary.len() - 1)];
+            }
             Screen::Containers => self.open_details().await?,
             Screen::Settings => {
-                if self.settings_selection == 7 {
+                if self.settings_selection == 8 {
                     self.save_settings()?;
-                } else if self.settings_selection == 8 {
+                } else if self.settings_selection == 9 {
                     self.config = Config::default();
                     self.notice = Some("settings reset to defaults".into());
                     self.push_settings().await;
@@ -364,8 +375,11 @@ impl App {
     }
     fn move_down(&mut self) {
         match self.screen {
-            Screen::Home => self.home_selection = (self.home_selection + 1).min(6),
-            Screen::Settings => self.settings_selection = (self.settings_selection + 1).min(8),
+            Screen::Home => {
+                let max = Screen::primary(self.config.mode).len() - 1;
+                self.home_selection = (self.home_selection + 1).min(max);
+            }
+            Screen::Settings => self.settings_selection = (self.settings_selection + 1).min(9),
             Screen::Containers => {
                 let visible = self.visible_indices();
                 if let Some(position) =
@@ -390,20 +404,21 @@ impl App {
     }
     fn change_setting(&mut self, right: bool) {
         match self.settings_selection {
-            0 => {
+            0 => self.config.mode = self.config.mode.toggle(),
+            1 => {
                 self.config.theme =
                     if right { self.config.theme.next() } else { previous_theme(self.config.theme) }
             }
-            1 => {}
-            2 => {
+            2 => {}
+            3 => {
                 self.config.sort =
                     if right { self.config.sort.next() } else { previous_sort(self.config.sort) }
             }
-            3 => self.config.show_stopped = !self.config.show_stopped,
-            4 => self.config.follow_logs = !self.config.follow_logs,
-            5 => self.config.density = self.config.density.toggle(),
-            6 => self.config.show_hints = !self.config.show_hints,
-            7 => self.config.show_gpu = !self.config.show_gpu,
+            4 => self.config.show_stopped = !self.config.show_stopped,
+            5 => self.config.follow_logs = !self.config.follow_logs,
+            6 => self.config.density = self.config.density.toggle(),
+            7 => self.config.show_hints = !self.config.show_hints,
+            8 => self.config.show_gpu = !self.config.show_gpu,
             _ => {}
         }
         let _ = self.config.save(&self.config_path);

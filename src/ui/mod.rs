@@ -1,11 +1,17 @@
 mod containers;
+mod cpu;
 mod details;
+mod disk;
 mod events;
 mod home;
 mod logs;
+mod memory;
+mod network;
 mod overview;
+mod processes;
 mod resources;
 mod settings;
+mod system;
 mod theme;
 
 pub use theme::Theme;
@@ -64,6 +70,12 @@ pub fn render(frame: &mut Frame, app: &App) {
             "Networks",
             resources::resource_rows(app, "networks"),
         ),
+        Screen::System => system::system(frame, app, outer[1], theme),
+        Screen::Cpu => cpu::cpu(frame, app, outer[1], theme),
+        Screen::Memory => memory::memory(frame, app, outer[1], theme),
+        Screen::Disk => disk::disk(frame, app, outer[1], theme),
+        Screen::Network => network::network(frame, app, outer[1], theme),
+        Screen::Processes => processes::processes(frame, app, outer[1], theme),
         Screen::Settings => settings::settings(frame, app, outer[1], theme),
     }
     footer(frame, app, outer[2], theme);
@@ -75,23 +87,28 @@ pub fn render(frame: &mut Frame, app: &App) {
 fn header(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(18), Constraint::Min(20), Constraint::Length(30)])
+        .constraints([Constraint::Length(22), Constraint::Min(20), Constraint::Length(30)])
         .split(area);
+    let mode_label = match app.config.mode {
+        crate::config::Mode::Docker => "docker",
+        crate::config::Mode::All => "all",
+    };
     let logo = Paragraph::new(Line::from(vec![
         Span::styled(" ◈ dtop", theme.title()),
         Span::styled(" 0.1", Style::default().fg(theme.muted)),
+        Span::styled(format!(" [{mode_label}]"), Style::default().fg(theme.accent)),
     ]))
     .block(
         Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(theme.border)),
     );
     frame.render_widget(logo, chunks[0]);
-    let tabs = Tabs::new(
-        Screen::PRIMARY.iter().map(|screen| Line::from(screen.label())).collect::<Vec<_>>(),
-    )
-    .select(Screen::PRIMARY.iter().position(|screen| *screen == app.screen).unwrap_or(0))
-    .style(Style::default().fg(theme.muted))
-    .highlight_style(theme.title().bg(theme.surface_alt))
-    .divider(" · ");
+    let primary = Screen::primary(app.config.mode);
+    let tabs =
+        Tabs::new(primary.iter().map(|screen| Line::from(screen.label())).collect::<Vec<_>>())
+            .select(primary.iter().position(|screen| *screen == app.screen).unwrap_or(0))
+            .style(Style::default().fg(theme.muted))
+            .highlight_style(theme.title().bg(theme.surface_alt))
+            .divider(" · ");
     frame.render_widget(
         tabs.block(
             Block::default()
@@ -192,6 +209,13 @@ fn yes_no(value: bool) -> String {
     } else {
         "no".into()
     }
+}
+
+/// Build a proportional bar for a 0–100 value, bounded to `width` cells.
+fn bar<'a>(value: f64, width: usize, color: ratatui::style::Color) -> Span<'a> {
+    let filled = ((value.clamp(0.0, 100.0) / 100.0) * width as f64).round() as usize;
+    let empty = width.saturating_sub(filled);
+    Span::styled(format!("{}{}", "█".repeat(filled), "░".repeat(empty)), Style::default().fg(color))
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

@@ -7,7 +7,19 @@ networks in one place.
 Built in Rust with ratatui + bollard. It talks to Docker over the Unix socket
 only — no registry calls, no telemetry, no remote hosts.
 
+## Modes
+
+- **docker** (default) — everything Docker: containers, images, volumes,
+  networks, events
+- **all** — btop-style host monitor: system overview, per-core CPU, memory
+  (RAM/zram/swapfile), disk I/O, network interfaces and a top-process list.
+  Host metrics are read straight from `/proc` and keep working even when the
+  Docker daemon is down. Switch modes in Settings (or `mode = "all"` in the
+  config).
+
 ## What it does
+
+### docker mode
 
 - **Overview** — total CPU with a scrolling history graph, per-service CPU and
   memory, and host memory split into RAM / zram / swapfile
@@ -20,6 +32,17 @@ only — no registry calls, no telemetry, no remote hosts.
 - **Images, volumes, networks** — plain lists with an empty state
 - **Safe actions only** — start, stop, restart, pause, unpause. Stop/restart/
   pause ask for confirmation first. There is no delete, no prune, no exec
+
+### all mode
+
+- **System** — host CPU total + load average + history graph, memory summary,
+  disk/net rate totals
+- **CPU** — per-core utilization bars and a 60-second history sparkline
+- **Memory** — RAM / zram / swapfile bars plus the top RSS processes
+- **Disk** — per physical disk cumulative bytes and read/write rates
+- **Network** — per interface rx/tx and live rate sparklines
+- **Processes** — top 64 processes by CPU (sortable by cpu/memory/name, `/`
+  to search)
 
 Stats are sampled every 500 ms. That interval is fixed; it is not a setting.
 
@@ -84,6 +107,7 @@ changed in the app are saved automatically. See `config/dtop.example.toml`.
 
 ```toml
 docker_socket = "/var/run/docker.sock"
+mode = "docker"            # docker | all
 theme = "default"          # default | midnight | amber | mono
 sort = "cpu"               # cpu | memory | uptime | name | status
 show_stopped = true
@@ -101,6 +125,7 @@ src/
 ├── app.rs         # UI state, navigation, filtering, actions
 ├── config.rs      # TOML config, validation, atomic save
 ├── docker/        # Docker client, adapter, stats, host memory, GPU probe
+├── host/          # /proc readers, delta math, host sampler (daemon-free)
 ├── model/         # display models, bounded buffers, history
 ├── runtime/       # supervisor: polling, log/event streams, reconnect
 ├── ui/            # one module per screen + theme

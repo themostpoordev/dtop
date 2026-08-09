@@ -69,6 +69,31 @@ impl SortOrder {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
+pub enum Mode {
+    /// Docker-only: containers, images, volumes, networks, events.
+    #[default]
+    Docker,
+    /// btop-style: host CPU, memory, disk, network, processes + Docker.
+    All,
+}
+impl Mode {
+    pub const ALL: [Self; 2] = [Self::Docker, Self::All];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Docker => "docker",
+            Self::All => "all",
+        }
+    }
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Docker => Self::All,
+            Self::All => Self::Docker,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Density {
     #[default]
     Comfortable,
@@ -100,6 +125,8 @@ pub struct Config {
     pub show_hints: bool,
     #[serde(default = "default_true")]
     pub show_gpu: bool,
+    #[serde(default)]
+    pub mode: Mode,
 }
 
 impl Default for Config {
@@ -113,6 +140,7 @@ impl Default for Config {
             density: Density::Comfortable,
             show_hints: true,
             show_gpu: true,
+            mode: Mode::Docker,
         }
     }
 }

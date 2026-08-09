@@ -47,6 +47,45 @@ impl History {
     }
 }
 
+/// Bounded f64 time series with EMA smoothing — used for disk/net rates.
+/// Same shape as `History` but without the u64 cast.
+#[derive(Clone, Debug, Default)]
+pub struct RateSeries {
+    pub values: VecDeque<f64>,
+    capacity: usize,
+    smoothed: Option<f64>,
+}
+
+impl RateSeries {
+    pub fn new() -> Self {
+        Self { values: VecDeque::with_capacity(120), capacity: 120, smoothed: None }
+    }
+    pub fn push(&mut self, value: f64) {
+        let smoothed = match self.smoothed {
+            Some(prev) => (value * 0.4) + (prev * 0.6),
+            None => value,
+        };
+        self.smoothed = Some(smoothed);
+        if self.values.len() == self.capacity {
+            self.values.pop_front();
+        }
+        self.values.push_back(smoothed);
+    }
+    pub fn as_slice(&self) -> Vec<f64> {
+        self.values.iter().copied().collect()
+    }
+}
+
+/// Host-level history for the "all" mode sparklines.
+#[derive(Clone, Debug, Default)]
+pub struct HostHistory {
+    pub cpu: History,
+    pub disk_read: RateSeries,
+    pub disk_write: RateSeries,
+    pub net_rx: RateSeries,
+    pub net_tx: RateSeries,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Metrics {
     pub cpu_percent: f64,

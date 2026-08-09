@@ -20,14 +20,15 @@ use crate::{
         container_meta, container_row, details, detect_gpus, event, image, log_output, network,
         raw_stats, read_host_memory, volume, DockerClient, GpuInfo, HostMemory, RawStats,
     },
+    host::HostSampler,
     model::{
-        ConnectionState, ContainerDetails, ContainerMeta, ContainerRow, DockerEvent, ImageRow,
-        LogLine, NetworkRow, VolumeRow,
+        ConnectionState, ContainerDetails, ContainerMeta, ContainerRow, DockerEvent, HostStats,
+        ImageRow, LogLine, NetworkRow, VolumeRow,
     },
 };
 
 const CHANNEL_CAPACITY: usize = 256;
-const EVENT_CAPACITY: usize = 512;
+const EVENT_CAPACITY: usize = 10000;
 const INVENTORY_INTERVAL: Duration = Duration::from_secs(30);
 const STATS_CONCURRENCY: usize = 16;
 const METADATA_CONCURRENCY: usize = 32;
@@ -53,6 +54,11 @@ pub enum RuntimeEvent {
     },
     Snapshot {
         containers: Vec<ContainerRow>,
+    },
+    /// Host-wide metrics (CPU/memory/disk/net/processes). Emitted every 500 ms
+    /// regardless of Docker connectivity — the sampler never touches the daemon.
+    HostSnapshot {
+        host: HostStats,
     },
     Inventory {
         images: Vec<ImageRow>,
@@ -113,6 +119,22 @@ impl Supervisor {
     }
 
     pub async fn run(mut self) {
+        // Host sampling runs on its own task, fully independent of the Docker
+        // select loop: it must fire every 500 ms even when the daemon is down
+        // and regardless of how busy the other arms are.
+        let host_task = {
+            let events = self.events.clone();
+            tokio::spawn(async move {
+                let mut sampler = HostSampler::new();
+                let mut tick = time::interval(Duration::from_millis(REFRESH_MS));
+                tick.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+                loop {
+                    tick.tick().await;
+                    let host = sampler.tick();
+                    let _ = events.try_send(RuntimeEvent::HostSnapshot { host });
+                }
+            })
+        };
         let mut refresh_tick = self.refresh_tick();
         let mut inventory_tick = time::interval(INVENTORY_INTERVAL);
         inventory_tick.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
@@ -133,7 +155,11 @@ impl Supervisor {
         loop {
             tokio::select! {
                 _ = connect_tick.tick(), if self.client.is_none() => self.try_connect(&mut event_task, &mut fast_tasks, &mut fast_running, &mut inventory_tasks, &mut inventory_running),
-                _ = refresh_tick.tick(), if !fast_running && self.client.is_some() => self.start_fast(&mut fast_tasks, &mut fast_running),
+                _ = refresh_tick.tick() => {
+                    if !fast_running && self.client.is_some() {
+                        self.start_fast(&mut fast_tasks, &mut fast_running);
+                    }
+                }
                 _ = inventory_tick.tick(), if !inventory_running && self.client.is_some() => self.start_inventory(&mut inventory_tasks, &mut inventory_running),
                 Some(result) = fast_tasks.join_next(), if fast_running => {
                     fast_running = false;
@@ -190,6 +216,7 @@ impl Supervisor {
                     Some(RuntimeCommand::Shutdown) | None => {
                         if let Some(handle) = log_task.take() { handle.abort(); }
                         if let Some(handle) = event_task.take() { handle.abort(); }
+                        host_task.abort();
                         fast_tasks.abort_all();
                         inventory_tasks.abort_all();
                         break;

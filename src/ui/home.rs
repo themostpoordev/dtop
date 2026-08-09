@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::App;
+use crate::{app::App, model::Screen};
 
 use super::{panel, Theme};
 
@@ -29,7 +29,8 @@ pub(super) fn home(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     ]))
     .block(panel(theme, "local Docker monitor"));
     frame.render_widget(logo, left[0]);
-    let items = ["Overview", "Containers", "Events", "Images", "Volumes", "Networks", "Settings"];
+    let items: Vec<&str> =
+        Screen::primary(app.config.mode).iter().map(|screen| screen.label()).collect();
     let selected = app.home_selection.min(items.len() - 1);
     let list = List::new(
         items

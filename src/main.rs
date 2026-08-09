@@ -79,15 +79,23 @@ async fn run_loop(
     app: &mut App,
     event_rx: &mut tokio::sync::mpsc::Receiver<RuntimeEvent>,
 ) -> Result<()> {
+    use tokio::time::{interval, Duration, MissedTickBehavior};
+
     let mut keys = EventStream::new();
     let mut dirty = true;
+    // Poll the event channel on a fixed cadence. Do NOT use recv() as a select
+    // arm: when another arm wins, the pending recv is cancelled and buffered
+    // messages stop waking us — the UI goes stale. A short interval keeps
+    // draining even under constant key input.
+    let mut drain_tick = interval(Duration::from_millis(16));
+    drain_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
         tokio::select! {
-            _ = event_rx.recv() => {
+            _ = drain_tick.tick() => {
                 while let Ok(event) = event_rx.try_recv() {
                     app.apply_runtime_event(event);
+                    dirty = true;
                 }
-                dirty = true;
             }
             _ = signal::ctrl_c() => { app.should_quit = true; dirty = true; }
             maybe_event = keys.next() => {

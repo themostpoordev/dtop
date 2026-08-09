@@ -93,8 +93,9 @@ fn tab_cycles_all_primary_sections() {
     let (mut app, _tx) = app();
     app.screen = Screen::Home;
     let mut seen = Vec::new();
-    for _ in 0..Screen::PRIMARY.len() {
-        app.screen = app.screen.next_primary();
+    let primary = Screen::primary(app.config.mode);
+    for _ in 0..primary.len() {
+        app.screen = app.screen.next_primary(app.config.mode);
         seen.push(app.screen);
     }
     assert_eq!(

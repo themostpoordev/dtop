@@ -4,6 +4,7 @@ pub mod action;
 pub mod app;
 pub mod config;
 pub mod docker;
+pub mod host;
 pub mod model;
 pub mod runtime;
 pub mod terminal;
