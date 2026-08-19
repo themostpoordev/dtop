@@ -95,7 +95,7 @@ fn header(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     };
     let logo = Paragraph::new(Line::from(vec![
         Span::styled(" ◈ dtop", theme.title()),
-        Span::styled(" 0.1", Style::default().fg(theme.muted)),
+        Span::styled(" 1.0", Style::default().fg(theme.muted)),
         Span::styled(format!(" [{mode_label}]"), Style::default().fg(theme.accent)),
     ]))
     .block(
@@ -216,6 +216,72 @@ fn bar<'a>(value: f64, width: usize, color: ratatui::style::Color) -> Span<'a> {
     let filled = ((value.clamp(0.0, 100.0) / 100.0) * width as f64).round() as usize;
     let empty = width.saturating_sub(filled);
     Span::styled(format!("{}{}", "█".repeat(filled), "░".repeat(empty)), Style::default().fg(color))
+}
+
+/// Render a time series as a dense gradient line, one cell per sample.
+///
+/// Each cell uses one of the 8 Unicode block levels (▁▂▃▄▅▆▇█) so a single
+/// terminal column carries 8 vertical steps of resolution — much finer than
+/// the 2-state sparkline. Colors lerp from `low` to `high` across the value
+/// range, so adjacent cells blend smoothly with no hard joints.
+pub fn gradient_line<'a>(
+    values: &[u64],
+    low: ratatui::style::Color,
+    high: ratatui::style::Color,
+    max: u64,
+) -> Line<'a> {
+    const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let max = max.max(1);
+    values
+        .iter()
+        .map(|value| {
+            let v = (*value).min(max);
+            let level = (v as f64 / max as f64 * 7.0).round() as usize;
+            Span::styled(
+                BLOCKS[level.min(7)].to_string(),
+                Style::default().fg(lerp_color(low, high, v as f64 / max as f64)),
+            )
+        })
+        .collect::<Line>()
+}
+
+/// Linear interpolation between two RGB colors, `t` in 0..=1.
+pub fn lerp_color(
+    low: ratatui::style::Color,
+    high: ratatui::style::Color,
+    t: f64,
+) -> ratatui::style::Color {
+    let (lr, lg, lb) = rgb_of(low);
+    let (hr, hg, hb) = rgb_of(high);
+    let t = t.clamp(0.0, 1.0);
+    ratatui::style::Color::Rgb(
+        (lr as f64 + (hr as f64 - lr as f64) * t).round() as u8,
+        (lg as f64 + (hg as f64 - lg as f64) * t).round() as u8,
+        (lb as f64 + (hb as f64 - lb as f64) * t).round() as u8,
+    )
+}
+
+fn rgb_of(color: ratatui::style::Color) -> (u8, u8, u8) {
+    match color {
+        ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
+        ratatui::style::Color::Black => (0, 0, 0),
+        ratatui::style::Color::White => (255, 255, 255),
+        ratatui::style::Color::Gray => (128, 128, 128),
+        ratatui::style::Color::DarkGray => (64, 64, 64),
+        ratatui::style::Color::LightRed => (255, 128, 128),
+        ratatui::style::Color::LightGreen => (128, 255, 128),
+        ratatui::style::Color::LightYellow => (255, 255, 128),
+        ratatui::style::Color::LightBlue => (128, 128, 255),
+        ratatui::style::Color::LightMagenta => (255, 128, 255),
+        ratatui::style::Color::LightCyan => (128, 255, 255),
+        ratatui::style::Color::Red => (200, 40, 40),
+        ratatui::style::Color::Green => (40, 200, 40),
+        ratatui::style::Color::Yellow => (200, 200, 40),
+        ratatui::style::Color::Blue => (40, 40, 200),
+        ratatui::style::Color::Magenta => (200, 40, 200),
+        ratatui::style::Color::Cyan => (40, 200, 200),
+        _ => (128, 128, 128),
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

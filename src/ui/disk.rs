@@ -1,19 +1,49 @@
 use ratatui::{
-    layout::{Constraint, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::Style,
-    widgets::{Cell, Row, Table},
+    text::{Line, Span},
+    widgets::{Cell, Paragraph, Row, Table},
     Frame,
 };
 
 use crate::{app::App, model::format_bytes};
 
-use super::{panel, Theme};
+use super::{gradient_line, panel, Theme};
 
-/// Per-physical-disk I/O: cumulative bytes + read/write rates.
+/// Per-physical-disk I/O: cumulative bytes, rates, and a gradient rate history.
 pub(super) fn disk(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(6), Constraint::Min(6)])
+        .split(area);
+
+    // Read/write rate history as gradient lines, normalized to the max seen.
+    let read_history = app.data.host_history.disk_read.as_slice();
+    let write_history = app.data.host_history.disk_write.as_slice();
+    let max_rate =
+        read_history.iter().chain(write_history.iter()).copied().fold(0.0f64, f64::max).max(1.0);
+    let read_norm = read_history.iter().map(|v| (v / max_rate * 100.0) as u64).collect::<Vec<_>>();
+    let write_norm =
+        write_history.iter().map(|v| (v / max_rate * 100.0) as u64).collect::<Vec<_>>();
+
+    let graph = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Length(3)])
+        .split(rows[0]);
+    frame.render_widget(
+        Paragraph::new(gradient_line(&read_norm, theme.good, theme.accent, 100))
+            .block(panel(theme, "read")),
+        graph[0],
+    );
+    frame.render_widget(
+        Paragraph::new(gradient_line(&write_norm, theme.accent, theme.good, 100))
+            .block(panel(theme, "write")),
+        graph[1],
+    );
+
     let disks = &app.data.host.disks;
     let headers = ["device", "read", "write", "read/s", "write/s"];
-    let rows = disks
+    let table_rows = disks
         .iter()
         .enumerate()
         .map(|(i, d)| {
@@ -40,10 +70,19 @@ pub(super) fn disk(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     ];
     let title = format!("{} disks", disks.len());
     frame.render_widget(
-        Table::new(rows, widths)
+        Table::new(table_rows, widths)
             .header(Row::new(headers).style(theme.title().bg(theme.surface_alt)))
             .block(panel(theme, &title))
             .column_spacing(1),
-        area,
+        rows[1],
     );
+
+    // Empty state: no disks detected — keep the panel informative.
+    if disks.is_empty() {
+        let empty = Line::from(Span::styled(
+            "no physical disks detected",
+            Style::default().fg(theme.muted),
+        ));
+        frame.render_widget(Paragraph::new(empty), rows[1]);
+    }
 }

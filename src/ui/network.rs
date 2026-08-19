@@ -2,26 +2,26 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Cell, Paragraph, Row, Sparkline, Table},
+    widgets::{Cell, Paragraph, Row, Table},
     Frame,
 };
 
 use crate::{app::App, model::format_bytes};
 
-use super::{panel, Theme};
+use super::{gradient_line, panel, Theme};
 
-/// Per-interface rx/tx rates + a total-rate sparkline.
+/// Per-interface rx/tx rates + gradient rate history.
 pub(super) fn network(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(6), Constraint::Min(6)])
+        .constraints([Constraint::Length(10), Constraint::Min(6)])
         .split(area);
 
     let nets = &app.data.host.nets;
     let rx_total: f64 = nets.iter().map(|n| n.rx_rate).sum();
     let tx_total: f64 = nets.iter().map(|n| n.tx_rate).sum();
 
-    // Sparkline of the total rx/tx over time.
+    // Gradient history of total rx/tx over time, normalized to the max seen.
     let rx_history = app.data.host_history.net_rx.as_slice();
     let tx_history = app.data.host_history.net_tx.as_slice();
     let max_rate = rx_history
@@ -31,13 +31,14 @@ pub(super) fn network(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         .fold(0.0f64, f64::max)
         .max(1.0)
         .max(rx_total.max(tx_total));
-    let rx_spark = rx_history.iter().map(|v| (v / max_rate * 100.0) as u64).collect::<Vec<_>>();
-    let tx_spark = tx_history.iter().map(|v| (v / max_rate * 100.0) as u64).collect::<Vec<_>>();
+    let rx_norm = rx_history.iter().map(|v| (v / max_rate * 100.0) as u64).collect::<Vec<_>>();
+    let tx_norm = tx_history.iter().map(|v| (v / max_rate * 100.0) as u64).collect::<Vec<_>>();
 
-    // Header + two sparklines (rx on top, tx below) — no overlap.
+    // Header + two gradient lines (rx on top, tx below) — each gets a real
+    // drawable row (borders take 2 rows of the panel).
     let graph = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(2), Constraint::Min(2)])
+        .constraints([Constraint::Length(3), Constraint::Length(3), Constraint::Length(3)])
         .split(rows[0]);
     let header = vec![
         Line::from(vec![
@@ -56,18 +57,12 @@ pub(super) fn network(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     ];
     frame.render_widget(Paragraph::new(header).block(panel(theme, "network")), graph[0]);
     frame.render_widget(
-        Sparkline::default()
-            .data(&rx_spark)
-            .max(100)
-            .style(Style::default().fg(theme.good))
+        Paragraph::new(gradient_line(&rx_norm, theme.good, theme.accent, 100))
             .block(panel(theme, "rx")),
         graph[1],
     );
     frame.render_widget(
-        Sparkline::default()
-            .data(&tx_spark)
-            .max(100)
-            .style(Style::default().fg(theme.accent))
+        Paragraph::new(gradient_line(&tx_norm, theme.accent, theme.good, 100))
             .block(panel(theme, "tx")),
         graph[2],
     );

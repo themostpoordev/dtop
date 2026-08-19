@@ -2,13 +2,13 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{List, ListItem, Paragraph, Sparkline},
+    widgets::{List, ListItem, Paragraph},
     Frame,
 };
 
 use crate::{app::App, model::format_bytes};
 
-use super::{panel, summary_cards, Theme};
+use super::{gradient_line, panel, summary_cards, Theme};
 
 pub(super) fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let rows = Layout::default()
@@ -37,7 +37,7 @@ pub(super) fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     ];
     frame.render_widget(Paragraph::new(big).block(panel(theme, "CPU")), cpu_top[0]);
     frame.render_widget(
-        Sparkline::default().data(&cpu_history).max(100).style(Style::default().fg(theme.accent)),
+        Paragraph::new(gradient_line(&cpu_history, theme.good, theme.accent, 100)),
         cpu_top[1],
     );
     let mut cpu_lines = Vec::new();

@@ -2,21 +2,21 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Sparkline},
+    widgets::Paragraph,
     Frame,
 };
 
 use crate::app::App;
 
-use super::{bar, panel, Theme};
+use super::{bar, gradient_line, panel, Theme};
 
-/// Per-core utilization bars + a total-CPU sparkline.
+/// Per-core utilization bars, gradient CPU history, and top CPU consumers.
 pub(super) fn cpu(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(10), Constraint::Min(8)])
+        .constraints([Constraint::Length(10), Constraint::Min(6), Constraint::Min(6)])
         .split(area);
-    // History panel: title lines on top, sparkline fills the rest inside one border.
+    // History panel: title lines on top, gradient line fills the rest inside one border.
     let history_top = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(5)])
@@ -39,26 +39,41 @@ pub(super) fn cpu(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     ];
     frame.render_widget(Paragraph::new(head).block(panel(theme, "CPU history")), history_top[0]);
     frame.render_widget(
-        Sparkline::default().data(&history).max(100).style(Style::default().fg(theme.accent)),
+        Paragraph::new(gradient_line(&history, theme.good, theme.accent, 100)),
         history_top[1],
     );
 
-    // Render only the cores that fit the viewport.
-    let mut lines = Vec::new();
+    // Per-core bars — only those that fit.
+    let mut core_lines = Vec::new();
     let cores = &app.data.host.cores;
     let available = rows[1].height.saturating_sub(2) as usize;
     for (index, percent) in cores.iter().enumerate().take(available) {
-        lines.push(Line::from(vec![
+        core_lines.push(Line::from(vec![
             Span::styled(format!("cpu{index:<3} "), Style::default().fg(theme.muted)),
             bar(*percent, 30, theme.accent),
             Span::styled(format!(" {percent:5.1}%"), Style::default().fg(theme.text)),
         ]));
     }
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
+    if core_lines.is_empty() {
+        core_lines.push(Line::from(Span::styled(
             "no cpu data yet — waiting for the first sample",
             Style::default().fg(theme.muted),
         )));
     }
-    frame.render_widget(Paragraph::new(lines).block(panel(theme, "per-core")), rows[1]);
+    frame.render_widget(Paragraph::new(core_lines).block(panel(theme, "per-core")), rows[1]);
+
+    // Top CPU consumers — same pattern as the memory screen's top-by-memory.
+    let mut top = app.data.host.processes.clone();
+    top.sort_by(|a, b| b.cpu_percent.total_cmp(&a.cpu_percent));
+    let proc_available = rows[2].height.saturating_sub(2) as usize;
+    let mut proc_lines =
+        vec![Line::from(Span::styled("top by cpu", Style::default().fg(theme.muted)))];
+    for p in top.into_iter().take(proc_available) {
+        proc_lines.push(Line::from(vec![
+            Span::styled(format!("{:<7}", p.pid), Style::default().fg(theme.muted)),
+            Span::styled(format!("{:<16} ", p.name), Style::default().fg(theme.text)),
+            Span::styled(format!("{:.1}%", p.cpu_percent), Style::default().fg(theme.accent)),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(proc_lines).block(panel(theme, "processes")), rows[2]);
 }
