@@ -2,13 +2,13 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Cell, Paragraph, Row, Table},
+    widgets::{Cell, Paragraph, Row, Sparkline, Table},
     Frame,
 };
 
 use crate::{app::App, model::format_bytes};
 
-use super::{gradient_line, panel, Theme};
+use super::{gradient_bars, panel, Theme};
 
 /// Per-physical-disk I/O: cumulative bytes, rates, and a gradient rate history.
 pub(super) fn disk(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
@@ -31,12 +31,18 @@ pub(super) fn disk(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         .constraints([Constraint::Length(3), Constraint::Length(3)])
         .split(rows[0]);
     frame.render_widget(
-        Paragraph::new(gradient_line(&read_norm, theme.good, theme.accent, 100))
+        Sparkline::default()
+            .data(gradient_bars(&read_norm, theme.good, theme.accent, 100))
+            .max(100)
+            .style(Style::default().fg(theme.good))
             .block(panel(theme, "read")),
         graph[0],
     );
     frame.render_widget(
-        Paragraph::new(gradient_line(&write_norm, theme.accent, theme.good, 100))
+        Sparkline::default()
+            .data(gradient_bars(&write_norm, theme.accent, theme.good, 100))
+            .max(100)
+            .style(Style::default().fg(theme.accent))
             .block(panel(theme, "write")),
         graph[1],
     );

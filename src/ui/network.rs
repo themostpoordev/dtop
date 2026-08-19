@@ -2,13 +2,13 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Cell, Paragraph, Row, Table},
+    widgets::{Cell, Paragraph, Row, Sparkline, Table},
     Frame,
 };
 
 use crate::{app::App, model::format_bytes};
 
-use super::{gradient_line, panel, Theme};
+use super::{gradient_bars, panel, Theme};
 
 /// Per-interface rx/tx rates + gradient rate history.
 pub(super) fn network(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
@@ -57,12 +57,18 @@ pub(super) fn network(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     ];
     frame.render_widget(Paragraph::new(header).block(panel(theme, "network")), graph[0]);
     frame.render_widget(
-        Paragraph::new(gradient_line(&rx_norm, theme.good, theme.accent, 100))
+        Sparkline::default()
+            .data(gradient_bars(&rx_norm, theme.good, theme.accent, 100))
+            .max(100)
+            .style(Style::default().fg(theme.good))
             .block(panel(theme, "rx")),
         graph[1],
     );
     frame.render_widget(
-        Paragraph::new(gradient_line(&tx_norm, theme.accent, theme.good, 100))
+        Sparkline::default()
+            .data(gradient_bars(&tx_norm, theme.accent, theme.good, 100))
+            .max(100)
+            .style(Style::default().fg(theme.accent))
             .block(panel(theme, "tx")),
         graph[2],
     );

@@ -2,24 +2,24 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Sparkline},
     Frame,
 };
 
 use crate::app::App;
 
-use super::{bar, gradient_line, panel, Theme};
+use super::{bar, gradient_bars, panel, Theme};
 
 /// Per-core utilization bars, gradient CPU history, and top CPU consumers.
 pub(super) fn cpu(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(10), Constraint::Min(6), Constraint::Min(6)])
+        .constraints([Constraint::Length(9), Constraint::Length(5), Constraint::Min(4)])
         .split(area);
     // History panel: title lines on top, gradient line fills the rest inside one border.
     let history_top = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(5)])
+        .constraints([Constraint::Length(3), Constraint::Min(4)])
         .split(rows[0]);
 
     let history = app.data.host_history.cpu.as_slice_cpu();
@@ -39,7 +39,10 @@ pub(super) fn cpu(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     ];
     frame.render_widget(Paragraph::new(head).block(panel(theme, "CPU history")), history_top[0]);
     frame.render_widget(
-        Paragraph::new(gradient_line(&history, theme.good, theme.accent, 100)),
+        Sparkline::default()
+            .data(gradient_bars(&history, theme.good, theme.accent, 100))
+            .max(100)
+            .style(Style::default().fg(theme.accent)),
         history_top[1],
     );
 

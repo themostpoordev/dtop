@@ -2,13 +2,13 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Sparkline},
     Frame,
 };
 
 use crate::{app::App, model::format_bytes};
 
-use super::{bar, gradient_line, panel, Theme};
+use super::{bar, gradient_bars, panel, Theme};
 
 /// All-mode home screen: host CPU + load + gradient, memory bars, disk/net rates.
 pub(super) fn system(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
@@ -40,95 +40,39 @@ pub(super) fn system(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     ];
     frame.render_widget(Paragraph::new(cpu_block).block(panel(theme, "CPU")), cpu[0]);
     frame.render_widget(
-        Paragraph::new(gradient_line(&cpu_history, theme.good, theme.accent, 100))
+        Sparkline::default()
+            .data(gradient_bars(&cpu_history, theme.good, theme.accent, 100))
+            .max(100)
+            .style(Style::default().fg(theme.accent))
             .block(panel(theme, "60 s")),
         cpu[1],
     );
 
-    // Memory summary with compact bars — no blank filler lines.
+    // Memory summary — every row gets a bar + numbers + percent, uniform.
     let memory = &host.memory;
+    let mut mem_lines = Vec::new();
+    let mut add_mem_row = |label: &str, used: u64, total: u64, color: ratatui::style::Color| {
+        let pct = if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 };
+        mem_lines.push(Line::from(vec![
+            Span::styled(format!("{label:<9}"), Style::default().fg(theme.muted)),
+            bar(pct, 20, color),
+            Span::styled(
+                format!(" {:>8} / {:<8} {:5.1}%", format_bytes(used), format_bytes(total), pct),
+                Style::default().fg(theme.text),
+            ),
+        ]));
+    };
+    add_mem_row("RAM", memory.ram_used, memory.ram_total, theme.good);
+    add_mem_row("zram", memory.zram_used, memory.zram_total, theme.warn);
+    add_mem_row("swapfile", memory.swapfile_used, memory.swapfile_total, theme.warn);
     let mem_pct = if memory.total() > 0 {
         (memory.used() as f64 / memory.total() as f64) * 100.0
     } else {
         0.0
     };
-    let mut mem_lines = vec![
-        Line::from(vec![
-            Span::styled(
-                format!("RAM {}/{}", format_bytes(memory.ram_used), format_bytes(memory.ram_total)),
-                Style::default().fg(theme.text),
-            ),
-            Span::styled(format!("  {:.0}%", mem_pct), Style::default().fg(theme.good)),
-        ]),
-        Line::from(vec![
-            Span::styled("zram", Style::default().fg(theme.muted)),
-            Span::styled(
-                if memory.zram_total > 0 {
-                    format!(
-                        " {}/{} ",
-                        format_bytes(memory.zram_used),
-                        format_bytes(memory.zram_total)
-                    )
-                } else {
-                    " not present".into()
-                },
-                Style::default().fg(theme.text),
-            ),
-            Span::styled(
-                if memory.zram_total > 0 {
-                    format!("{:.0}%", (memory.zram_used as f64 / memory.zram_total as f64) * 100.0)
-                } else {
-                    String::new()
-                },
-                Style::default().fg(theme.warn),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("swap", Style::default().fg(theme.muted)),
-            Span::styled(
-                if memory.swapfile_total > 0 {
-                    format!(
-                        " {}/{} ",
-                        format_bytes(memory.swapfile_used),
-                        format_bytes(memory.swapfile_total)
-                    )
-                } else {
-                    " not present".into()
-                },
-                Style::default().fg(theme.text),
-            ),
-            Span::styled(
-                if memory.swapfile_total > 0 {
-                    format!(
-                        "{:.0}%",
-                        (memory.swapfile_used as f64 / memory.swapfile_total as f64) * 100.0
-                    )
-                } else {
-                    String::new()
-                },
-                Style::default().fg(theme.warn),
-            ),
-        ]),
-    ];
-    // Fill remaining panel height with the RAM bar for a dense look.
-    if memory.zram_total > 0 {
-        mem_lines.push(Line::from(vec![
-            Span::styled("zram", Style::default().fg(theme.muted)),
-            bar((memory.zram_used as f64 / memory.zram_total as f64) * 100.0, 40, theme.warn),
-        ]));
-    }
-    if memory.swapfile_total > 0 {
-        mem_lines.push(Line::from(vec![
-            Span::styled("swap", Style::default().fg(theme.muted)),
-            bar(
-                (memory.swapfile_used as f64 / memory.swapfile_total as f64) * 100.0,
-                40,
-                theme.warn,
-            ),
-        ]));
-    }
+    mem_lines.push(Line::from(""));
     mem_lines.push(Line::from(vec![
-        Span::styled("total ", Style::default().fg(theme.muted)),
+        Span::styled("total     ", Style::default().fg(theme.muted)),
         Span::styled(
             format!("{} / {}", format_bytes(memory.used()), format_bytes(memory.total())),
             Style::default().fg(theme.text),

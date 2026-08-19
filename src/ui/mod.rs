@@ -218,31 +218,29 @@ fn bar<'a>(value: f64, width: usize, color: ratatui::style::Color) -> Span<'a> {
     Span::styled(format!("{}{}", "█".repeat(filled), "░".repeat(empty)), Style::default().fg(color))
 }
 
-/// Render a time series as a dense gradient line, one cell per sample.
+/// Render a time series as a full-height gradient sparkline.
 ///
-/// Each cell uses one of the 8 Unicode block levels (▁▂▃▄▅▆▇█) so a single
-/// terminal column carries 8 vertical steps of resolution — much finer than
-/// the 2-state sparkline. Colors lerp from `low` to `high` across the value
-/// range, so adjacent cells blend smoothly with no hard joints.
-pub fn gradient_line<'a>(
+/// Returns `Vec<SparklineBar>` where every bar gets a lerped color from `low`
+/// to `high` across the value range. The sparkline widget fills the whole
+/// area it is rendered into — no more tiny 1-row line in a tall frame.
+pub fn gradient_bars(
     values: &[u64],
     low: ratatui::style::Color,
     high: ratatui::style::Color,
     max: u64,
-) -> Line<'a> {
-    const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+) -> Vec<ratatui::widgets::SparklineBar> {
     let max = max.max(1);
     values
         .iter()
         .map(|value| {
             let v = (*value).min(max);
-            let level = (v as f64 / max as f64 * 7.0).round() as usize;
-            Span::styled(
-                BLOCKS[level.min(7)].to_string(),
-                Style::default().fg(lerp_color(low, high, v as f64 / max as f64)),
-            )
+            ratatui::widgets::SparklineBar::from(v).style(Some(Style::default().fg(lerp_color(
+                low,
+                high,
+                v as f64 / max as f64,
+            ))))
         })
-        .collect::<Line>()
+        .collect()
 }
 
 /// Linear interpolation between two RGB colors, `t` in 0..=1.

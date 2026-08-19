@@ -2,7 +2,10 @@
 //! Fast files are read every tick; the process scan runs on a slower cadence so
 //! a large `/proc` never stalls the 500 ms loop.
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use super::{
     proc::{read_host_raw, scan_processes, HostRaw},
@@ -17,6 +20,8 @@ const PROC_SCAN_INTERVAL: Duration = Duration::from_millis(2000);
 pub struct HostSampler {
     state: Option<HostSampleState>,
     last_proc_scan: Option<Instant>,
+    /// Per-pid EMA state for smooth process CPU%.
+    proc_cpu_smooth: HashMap<i32, f64>,
 }
 
 struct HostSampleState {
@@ -32,7 +37,7 @@ impl Default for HostSampler {
 
 impl HostSampler {
     pub fn new() -> Self {
-        Self { state: None, last_proc_scan: None }
+        Self { state: None, last_proc_scan: None, proc_cpu_smooth: HashMap::new() }
     }
 
     /// Sample the host. The first tick returns zeros for every rate; results
@@ -62,7 +67,7 @@ impl HostSampler {
             .as_ref()
             .map(|state| state.sampled_at.elapsed().as_secs_f64().max(0.001))
             .unwrap_or(0.0);
-        let stats = host_stats_from_raw(&current, previous, elapsed);
+        let stats = host_stats_from_raw(&current, previous, elapsed, &mut self.proc_cpu_smooth);
         self.state = Some(HostSampleState { current, sampled_at: now });
         stats
     }

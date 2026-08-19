@@ -10,10 +10,33 @@ use crate::model::{DiskIo, HostStats, NetIo, ProcessRow};
 /// so next-tick deltas stay correct — only what the UI sees is truncated.
 pub const MAX_PROCESSES: usize = 64;
 
+/// Exponential smoothing factor for per-process CPU% — tames the 0%↔400%
+/// jumps that raw 500 ms deltas produce. 0.4 new / 0.6 previous.
+pub const PROC_CPU_SMOOTHING: f64 = 0.4;
+
+/// Smooth per-process CPU% across ticks. `previous` is the last displayed
+/// value for that pid (None for a brand-new process → raw value).
+pub fn smooth_process_cpu(raw: f64, previous: Option<f64>, total_delta: u64, elapsed: f64) -> f64 {
+    // If the host was idle (no ticks consumed), a process that woke up mid-gap
+    // would look like 400%. Scale by the expected sample length so the number
+    // stays sane even on the first sample after a stall.
+    let scaled = if total_delta == 0 {
+        0.0
+    } else {
+        let expected_samples = (elapsed / 0.5).clamp(1.0, 4.0);
+        raw * (1.0 / expected_samples)
+    };
+    match previous {
+        Some(prev) => (scaled * PROC_CPU_SMOOTHING) + (prev * (1.0 - PROC_CPU_SMOOTHING)),
+        None => scaled,
+    }
+}
+
 pub fn host_stats_from_raw(
     current: &HostRaw,
     previous: Option<&HostRaw>,
     elapsed: f64,
+    proc_cpu_smooth: &mut HashMap<i32, f64>,
 ) -> HostStats {
     let elapsed = elapsed.max(0.001);
     // First sample: treat the previous sample as identical to the current one,
@@ -44,6 +67,7 @@ pub fn host_stats_from_raw(
         num_cpus,
         elapsed,
         ram_total,
+        proc_cpu_smooth,
     );
     processes.sort_by(|a, b| {
         b.cpu_percent.total_cmp(&a.cpu_percent).then_with(|| b.rss_bytes.cmp(&a.rss_bytes))
@@ -115,11 +139,12 @@ fn process_rows(
     previous: &[ProcRaw],
     total_delta: u64,
     num_cpus: usize,
-    _elapsed: f64,
+    elapsed: f64,
     ram_total: u64,
+    proc_cpu_smooth: &mut HashMap<i32, f64>,
 ) -> Vec<ProcessRow> {
     let prev_by_pid = previous.iter().map(|p| (p.pid, p)).collect::<HashMap<_, _>>();
-    current
+    let rows = current
         .iter()
         .map(|p| {
             let prev = prev_by_pid.get(&p.pid).copied();
@@ -127,11 +152,16 @@ fn process_rows(
                 .utime
                 .saturating_add(p.stime)
                 .saturating_sub(prev.map_or(0, |prev| prev.utime.saturating_add(prev.stime)));
-            let cpu_percent = if total_delta == 0 {
+            let raw_cpu = if total_delta == 0 {
                 0.0
             } else {
                 d_proc as f64 / total_delta as f64 * num_cpus as f64 * 100.0
             };
+            // EMA-smooth per-process CPU% so the list doesn't flicker between
+            // 0% and 400% on short 500 ms deltas.
+            let previous_smooth = proc_cpu_smooth.get(&p.pid).copied();
+            let cpu_percent = smooth_process_cpu(raw_cpu, previous_smooth, total_delta, elapsed);
+            proc_cpu_smooth.insert(p.pid, cpu_percent);
             let rss_bytes = p.rss_pages.saturating_mul(PAGE_SIZE);
             let mem_percent = (rss_bytes as f64 / ram_total as f64) * 100.0;
             ProcessRow {
@@ -144,7 +174,10 @@ fn process_rows(
                 threads: p.threads,
             }
         })
-        .collect()
+        .collect();
+    // Drop smoothing state for processes that no longer exist.
+    proc_cpu_smooth.retain(|pid, _| current.iter().any(|p| p.pid == *pid));
+    rows
 }
 
 #[cfg(test)]
@@ -161,7 +194,7 @@ mod tests {
     fn first_sample_is_zero() {
         let current =
             raw_with(CoreRaw { total: 1000, idle: 800 }, vec![CoreRaw { total: 500, idle: 400 }]);
-        let stats = host_stats_from_raw(&current, None, 0.5);
+        let stats = host_stats_from_raw(&current, None, 0.5, &mut HashMap::new());
         assert_eq!(stats.cpu_total, 0.0);
         assert_eq!(stats.cores, vec![0.0]);
         assert!(stats.disks.is_empty());
@@ -177,7 +210,7 @@ mod tests {
             CoreRaw { total: 2000, idle: 1200 }, // busy: 600 of 1000 ticks = 60%
             vec![CoreRaw { total: 1000, idle: 600 }], // busy: 300 of 500 ticks = 60%
         );
-        let stats = host_stats_from_raw(&current, Some(&prev), 0.5);
+        let stats = host_stats_from_raw(&current, Some(&prev), 0.5, &mut HashMap::new());
         assert_eq!(stats.cpu_total, 60.0);
         assert_eq!(stats.cores[0], 60.0);
     }
@@ -186,7 +219,7 @@ mod tests {
     fn cpu_percent_no_divide_by_zero() {
         let prev = raw_with(CoreRaw { total: 100, idle: 80 }, vec![]);
         let current = raw_with(CoreRaw { total: 100, idle: 80 }, vec![]);
-        let stats = host_stats_from_raw(&current, Some(&prev), 0.5);
+        let stats = host_stats_from_raw(&current, Some(&prev), 0.5, &mut HashMap::new());
         assert_eq!(stats.cpu_total, 0.0);
     }
 
@@ -197,7 +230,7 @@ mod tests {
         let mut current = raw_with(CoreRaw::default(), vec![]);
         current.disks =
             vec![DiskRaw { name: "sda".into(), sectors_read: 300, sectors_written: 150 }];
-        let stats = host_stats_from_raw(&current, Some(&prev), 2.0);
+        let stats = host_stats_from_raw(&current, Some(&prev), 2.0, &mut HashMap::new());
         assert_eq!(stats.disks.len(), 1);
         // (300-100)*512 / 2 = 51200 B/s
         assert_eq!(stats.disks[0].read_rate, 51200.0);
@@ -210,7 +243,7 @@ mod tests {
         prev.nets = vec![NetRaw { name: "eth0".into(), rx_bytes: 1000, tx_bytes: 2000 }];
         let mut current = raw_with(CoreRaw::default(), vec![]);
         current.nets = vec![NetRaw { name: "eth0".into(), rx_bytes: 3000, tx_bytes: 2000 }];
-        let stats = host_stats_from_raw(&current, Some(&prev), 1.0);
+        let stats = host_stats_from_raw(&current, Some(&prev), 1.0, &mut HashMap::new());
         assert_eq!(stats.nets[0].rx_rate, 2000.0);
         assert_eq!(stats.nets[0].tx_rate, 0.0);
     }
@@ -238,7 +271,7 @@ mod tests {
             threads: 1,
         }];
         current.memory = HostMemory { ram_total: 1024 * 1024, ..Default::default() };
-        let stats = host_stats_from_raw(&current, Some(&prev), 0.5);
+        let stats = host_stats_from_raw(&current, Some(&prev), 0.5, &mut HashMap::new());
         assert_eq!(stats.processes.len(), 1);
         // d_proc=150, d_total=1000, 1 cpu → 15%
         assert_eq!(stats.processes[0].cpu_percent, 15.0);
@@ -271,7 +304,7 @@ mod tests {
                 threads: 1,
             });
         }
-        let stats = host_stats_from_raw(&current, Some(&prev), 0.5);
+        let stats = host_stats_from_raw(&current, Some(&prev), 0.5, &mut HashMap::new());
         assert_eq!(stats.processes.len(), MAX_PROCESSES);
     }
 }
