@@ -1,48 +1,58 @@
 # dtop
 
-A terminal monitor for the local Docker daemon. Shows your containers the way
-`docker stats` always wanted to, with logs, events, images, volumes and
-networks in one place.
+A fast, local-first terminal monitor for Docker **and your host**. Watch
+containers the way `docker stats` always wanted to — logs, events, images,
+volumes and networks in one place — or flip to **all mode** for a btop-style
+system monitor with CPU, memory, disk, network and process graphs.
 
-Built in Rust with ratatui + bollard. It talks to Docker over the Unix socket
-only — no registry calls, no telemetry, no remote hosts.
+Built in Rust with ratatui + bollard. Talks to Docker over the Unix socket
+only — no registry calls, no telemetry, no remote hosts, no cloud.
+
+![rust](https://img.shields.io/badge/rust-1.88+-orange.svg) ![license](https://img.shields.io/badge/license-MIT-blue.svg)
+
+## Features
+
+- **Two modes** — `docker` (containers & resources) and `all` (host system monitor)
+- **Gradient graphs** — every history graph renders as 8-level gradient lines
+  (`▁▂▃▄▅▆▇█`) with lerped colors; smooth, no hard joints, one cell per sample
+- **Dense UI** — no wasted rows; every panel shows live data
+- **Daemon-independent** — `all` mode reads `/proc` directly and keeps working
+  even when the Docker daemon is down
+- **Fast & light** — fast tick reads 5 small `/proc` files in ~112 µs; process
+  scan runs on a slower 2 s cadence; zero new dependencies, zero unsafe code
+- **Safe actions only** — start, stop, restart, pause, unpause with
+  confirmation. No delete, no prune, no exec
 
 ## Modes
 
-- **docker** (default) — everything Docker: containers, images, volumes,
-  networks, events
-- **all** — btop-style host monitor: system overview, per-core CPU, memory
-  (RAM/zram/swapfile), disk I/O, network interfaces and a top-process list.
-  Host metrics are read straight from `/proc` and keep working even when the
-  Docker daemon is down. Switch modes in Settings (or `mode = "all"` in the
-  config).
+| Mode | Screens |
+|------|---------|
+| **docker** (default) | Overview · Containers · Events · Images · Volumes · Networks · Settings |
+| **all** | System · CPU · Memory · Disk · Network · Processes · Settings |
 
-## What it does
+Switch modes in **Settings** (first row) or set `mode = "all"` in the config.
 
 ### docker mode
 
-- **Overview** — total CPU with a scrolling history graph, per-service CPU and
-  memory, and host memory split into RAM / zram / swapfile
-- **Containers** — live CPU, memory, network and block I/O, uptime, restart
-  count and health, with search (`/`) and sortable columns
-- **Details** — inspect view of the selected container (ports, mounts,
-  networks, command). Environment values are intentionally not shown
-- **Logs** — stdout/stderr with follow mode and a bounded scrollback
-- **Events** — the daemon's event stream, filtered by container
-- **Images, volumes, networks** — plain lists with an empty state
-- **Safe actions only** — start, stop, restart, pause, unpause. Stop/restart/
-  pause ask for confirmation first. There is no delete, no prune, no exec
+- **Overview** — total CPU with gradient history, per-service CPU/memory, host
+  memory split into RAM / zram / swapfile
+- **Containers** — live CPU, memory, network and block I/O, uptime, restarts
+  and health, with search (`/`) and sortable columns
+- **Details** — inspect view (ports, mounts, networks, command). Environment
+  values are intentionally not shown
+- **Logs** — stdout/stderr with follow mode and bounded scrollback
+- **Events** — the daemon's event stream, filterable
+- **Images / Volumes / Networks** — plain lists with empty states
 
 ### all mode
 
-- **System** — host CPU total + load average + history graph, memory summary,
-  disk/net rate totals
-- **CPU** — per-core utilization bars and a 60-second history sparkline
+- **System** — CPU total + load average + gradient history, memory bars
+  (RAM/zram/swapfile), disk/net rate totals
+- **CPU** — per-core bars, gradient history, and a top-by-CPU process list
 - **Memory** — RAM / zram / swapfile bars plus the top RSS processes
-- **Disk** — per physical disk cumulative bytes and read/write rates
-- **Network** — per interface rx/tx and live rate sparklines
-- **Processes** — top 64 processes by CPU (sortable by cpu/memory/name, `/`
-  to search)
+- **Disk** — read/write gradient history plus per-disk cumulative bytes and rates
+- **Network** — rx/tx gradient history plus per-interface rates
+- **Processes** — top 64 processes, sortable (cpu / memory / name), `/` to search
 
 Stats are sampled every 500 ms. That interval is fixed; it is not a setting.
 
@@ -54,7 +64,7 @@ Grab the latest release from
 [GitHub Releases](https://github.com/themostpoordev/dtop/releases):
 
 ```sh
-tar xzf dtop-v*.tar.gz
+tar xzf dtop-v1.0.0.tar.gz
 sudo install -m 0755 dtop /usr/local/bin/dtop
 dtop
 ```
@@ -117,7 +127,7 @@ show_hints = true
 show_gpu = true            # GPU panel only appears when a GPU is detected
 ```
 
-## Layout
+## Architecture
 
 ```
 src/
@@ -131,6 +141,16 @@ src/
 ├── ui/            # one module per screen + theme
 └── terminal.rs    # raw mode / alternate screen guard
 ```
+
+### Performance notes
+
+- The host sampler runs on its **own task**, independent of the Docker select
+  loop — it fires every 500 ms even when the daemon is down
+- The fast tick reads only 5 small `/proc` files (~112 µs); the process scan
+  (the expensive part, ~6 ms) runs every 2 s
+- The UI polls the event channel on a fixed cadence instead of blocking on
+  `recv()`, so snapshots can never be starved by a busy key stream
+- Everything is bounded: 64 processes, 120-sample history, drop-on-full events
 
 ## Development
 
