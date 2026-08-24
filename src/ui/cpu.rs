@@ -12,9 +12,17 @@ use super::{bar, gradient_bars, panel, Theme};
 
 /// Per-core utilization bars, gradient CPU history, and top CPU consumers.
 pub(super) fn cpu(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
+    // Per-core panel is sized to fit every core (one row each + top/bottom border),
+    // with a sensible minimum so the panel stays usable on tiny terminals.
+    let cores_len = app.data.host.cores.len();
+    let per_core_height = (cores_len as u16 + 2).max(5);
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(9), Constraint::Length(5), Constraint::Min(4)])
+        .constraints([
+            Constraint::Length(9),
+            Constraint::Length(per_core_height),
+            Constraint::Min(4),
+        ])
         .split(area);
     // History panel: title lines on top, gradient line fills the rest inside one border.
     let history_top = Layout::default()
@@ -46,11 +54,10 @@ pub(super) fn cpu(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         history_top[1],
     );
 
-    // Per-core bars — only those that fit.
+    // Per-core bars — one row per core, panel sized to fit them all.
     let mut core_lines = Vec::new();
     let cores = &app.data.host.cores;
-    let available = rows[1].height.saturating_sub(2) as usize;
-    for (index, percent) in cores.iter().enumerate().take(available) {
+    for (index, percent) in cores.iter().enumerate() {
         core_lines.push(Line::from(vec![
             Span::styled(format!("cpu{index:<3} "), Style::default().fg(theme.muted)),
             bar(*percent, 30, theme.accent),
