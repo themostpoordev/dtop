@@ -1,53 +1,59 @@
 name: Release
 
+# Trigger: publishing a GitHub Release (web UI or `gh release create`) builds
+# the artifacts and attaches them to that same release. The tag `vX.Y.Z`
+# must match `version` in Cargo.toml.
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types: [published]
 
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  release:
-    name: Build and publish release
+  assets:
+    name: Build and upload assets
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Extract version
+      - name: Resolve version from release tag
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify Cargo.toml version matches tag
+      - name: Verify Cargo.toml version matches release tag
         run: |
           cargo_version=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
           if [ "$cargo_version" != "${{ steps.version.outputs.version }}" ]; then
-            echo "::error::Cargo.toml version ($cargo_version) does not match tag (${{ steps.version.outputs.version }})"
+            echo "::error::Cargo.toml version ($cargo_version) does not match release tag (${{ steps.version.outputs.tag }})"
             exit 1
           fi
 
       - name: Format check
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Test
-        run: cargo test --all-targets
+        run: cargo test --all-targets --all-features
 
       - name: Build release binary
         run: cargo build --release --locked
 
-      - name: Strip binary
-        run: strip --strip-unneeded target/release/dtop
-
+      # Stripping is already handled by `[profile.release] strip = true` in
+      # Cargo.toml — no separate `strip` step needed.
       - name: Package tarball
         run: |
           asset="dtop-v${{ steps.version.outputs.version }}-linux-x86_64"
@@ -55,7 +61,9 @@ jobs:
           cp target/release/dtop "$asset/dtop"
           cp README.md "$asset/README.md"
           cp LICENSE "$asset/LICENSE"
-          tar -C "$asset" -czf "${asset}.tar.gz" .
+          cp config/dtop.example.toml "$asset/dtop.example.toml"
+          # Top-level folder inside the tarball (no tarbomb on extract).
+          tar -czf "${asset}.tar.gz" "$asset"
           sha256sum "${asset}.tar.gz" > "${asset}.tar.gz.sha256"
 
       - name: Upload release assets
@@ -64,4 +72,3 @@ jobs:
           files: |
             dtop-v${{ steps.version.outputs.version }}-linux-x86_64.tar.gz
             dtop-v${{ steps.version.outputs.version }}-linux-x86_64.tar.gz.sha256
-          generate_release_notes: true

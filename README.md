@@ -67,8 +67,8 @@ Grab the latest release from
 [GitHub Releases](https://github.com/themostpoordev/dtop/releases):
 
 ```sh
-tar xzf dtop-v1.0.0.tar.gz
-sudo install -m 0755 dtop /usr/local/bin/dtop
+tar xzf dtop-v1.0.0-linux-x86_64.tar.gz
+sudo install -m 0755 dtop-v1.0.0-linux-x86_64/dtop /usr/local/bin/dtop
 dtop
 ```
 
@@ -164,7 +164,7 @@ cargo build --release
 cargo test --all-targets
 ```
 
-CI runs all four on every push and pull request.
+CI runs fmt, clippy, tests, a security audit, and a release build on every pull request.
 
 ## Why no refresh setting
 
