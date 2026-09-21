@@ -81,11 +81,19 @@ pub(super) fn system(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
     ]));
     frame.render_widget(Paragraph::new(mem_lines).block(panel(theme, "memory")), rows[1]);
 
-    // Disk + network rate summary — compact two lines.
+    // Disk + network rate summary — cumulative totals alongside rates so an
+    // idle machine still reads as information ("idle · total …") rather than
+    // a row of zeros that looks like missing data.
     let disk_read: f64 = host.disks.iter().map(|d| d.read_rate).sum();
     let disk_write: f64 = host.disks.iter().map(|d| d.write_rate).sum();
+    let disk_read_cum: u64 = host.disks.iter().map(|d| d.read_bytes).sum();
+    let disk_write_cum: u64 = host.disks.iter().map(|d| d.write_bytes).sum();
     let net_rx: f64 = host.nets.iter().map(|n| n.rx_rate).sum();
     let net_tx: f64 = host.nets.iter().map(|n| n.tx_rate).sum();
+    let net_rx_cum: u64 = host.nets.iter().map(|n| n.rx_bytes).sum();
+    let net_tx_cum: u64 = host.nets.iter().map(|n| n.tx_bytes).sum();
+    let disk_idle = disk_read < 1.0 && disk_write < 1.0;
+    let net_idle = net_rx < 1.0 && net_tx < 1.0;
     let io_lines = vec![
         Line::from(vec![
             Span::styled("disk ↓ ", Style::default().fg(theme.muted)),
@@ -98,7 +106,22 @@ pub(super) fn system(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
                 format!("{}/s", format_bytes(disk_write.max(0.0) as u64)),
                 Style::default().fg(theme.text),
             ),
-            Span::styled("   net ↓ ", Style::default().fg(theme.muted)),
+            Span::styled(
+                format!(
+                    "  · total ↓ {} ↑ {}",
+                    format_bytes(disk_read_cum),
+                    format_bytes(disk_write_cum)
+                ),
+                Style::default().fg(theme.muted),
+            ),
+            if disk_idle {
+                Span::styled(" · idle", Style::default().fg(theme.muted))
+            } else {
+                Span::from("")
+            },
+        ]),
+        Line::from(vec![
+            Span::styled("net  ↓ ", Style::default().fg(theme.muted)),
             Span::styled(
                 format!("{}/s", format_bytes(net_rx.max(0.0) as u64)),
                 Style::default().fg(theme.text),
@@ -108,6 +131,15 @@ pub(super) fn system(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
                 format!("{}/s", format_bytes(net_tx.max(0.0) as u64)),
                 Style::default().fg(theme.text),
             ),
+            Span::styled(
+                format!("  · total ↓ {} ↑ {}", format_bytes(net_rx_cum), format_bytes(net_tx_cum)),
+                Style::default().fg(theme.muted),
+            ),
+            if net_idle {
+                Span::styled(" · idle", Style::default().fg(theme.muted))
+            } else {
+                Span::from("")
+            },
         ]),
         Line::from(Span::styled(
             "Tab to CPU · Memory · Disk · Network · Processes",

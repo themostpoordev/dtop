@@ -74,6 +74,18 @@ impl RateSeries {
     pub fn as_slice(&self) -> Vec<f64> {
         self.values.iter().copied().collect()
     }
+    /// Latest smoothed sample, 0 when no sample has arrived yet.
+    pub fn latest(&self) -> f64 {
+        self.values.back().copied().unwrap_or(0.0)
+    }
+    /// Highest smoothed sample in the window — the "peak" shown in headers.
+    /// EMA-smoothed, so it tracks sustained highs, not one-tick spikes.
+    pub fn peak(&self) -> f64 {
+        self.values.iter().copied().fold(0.0f64, f64::max)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
 }
 
 /// Host-level history for the "all" mode sparklines.

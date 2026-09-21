@@ -8,7 +8,7 @@ use std::{
 };
 
 use super::{
-    proc::{read_host_raw, scan_processes, HostRaw},
+    proc::{read_host_raw, read_mounts, scan_processes, HostRaw},
     stats::host_stats_from_raw,
 };
 use crate::model::HostStats;
@@ -17,11 +17,18 @@ use crate::model::HostStats;
 /// 500 ms tick would waste ~4/5 of the cost on unchanged data.
 const PROC_SCAN_INTERVAL: Duration = Duration::from_millis(2000);
 
+/// Mount-table refresh cadence. On container hosts `/proc/mounts` carries one
+/// overlay line per container, so re-reading it every 500 ms is pure garbage —
+/// mounts barely change, 10 s is plenty and keeps the fast tick at ~µs.
+const MOUNT_TTL: Duration = Duration::from_secs(10);
+
 pub struct HostSampler {
     state: Option<HostSampleState>,
     last_proc_scan: Option<Instant>,
     /// Per-pid EMA state for smooth process CPU%.
     proc_cpu_smooth: HashMap<i32, f64>,
+    mounts: Vec<super::proc::MountRaw>,
+    last_mounts: Option<Instant>,
 }
 
 struct HostSampleState {
@@ -37,7 +44,13 @@ impl Default for HostSampler {
 
 impl HostSampler {
     pub fn new() -> Self {
-        Self { state: None, last_proc_scan: None, proc_cpu_smooth: HashMap::new() }
+        Self {
+            state: None,
+            last_proc_scan: None,
+            proc_cpu_smooth: HashMap::new(),
+            mounts: Vec::new(),
+            last_mounts: None,
+        }
     }
 
     /// Sample the host. The first tick returns zeros for every rate; results
@@ -59,6 +72,18 @@ impl HostSampler {
         } else if let Some(state) = &self.state {
             current.processes = state.current.processes.clone();
         }
+
+        // Mounts change rarely — refresh on TTL, reuse the cached list
+        // otherwise (a handful of rows, so the clone is trivial).
+        let mounts_due = match self.last_mounts {
+            Some(last) => now.duration_since(last) >= MOUNT_TTL,
+            None => true,
+        };
+        if mounts_due {
+            self.mounts = read_mounts();
+            self.last_mounts = Some(now);
+        }
+        current.mounts = self.mounts.clone();
 
         // The stored sample *is* the previous sample for this tick.
         let previous = self.state.as_ref().map(|state| &state.current);

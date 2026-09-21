@@ -50,8 +50,11 @@ Switch modes in **Settings** (first row) or set `mode = "all"` in the config.
   (RAM/zram/swapfile), disk/net rate totals
 - **CPU** — per-core bars, gradient history, and a top-by-CPU process list
 - **Memory** — RAM / zram / swapfile bars plus the top RSS processes
-- **Disk** — read/write gradient history plus per-disk cumulative bytes and rates
-- **Network** — rx/tx gradient history plus per-interface rates
+- **Disk** — read/write gradient history (current + peak in every title),
+  per-disk totals, rates, IOPS and utilization, plus mounted filesystems —
+  idle disks show totals and an `idle` tag instead of a blank panel
+- **Network** — rx/tx gradient history plus per-interface totals, rates,
+  packet/s and error/drop counters, busiest first, with totals even when idle
 - **Processes** — top 64 processes, sortable (cpu / memory / name), `/` to search
 
 Stats are sampled every 500 ms. That interval is fixed; it is not a setting.
@@ -118,7 +121,7 @@ changed in the app are saved automatically. See `config/dtop.example.toml`.
 ```toml
 docker_socket = "/var/run/docker.sock"
 mode = "docker"            # docker | all
-theme = "default"          # default | midnight | amber | mono
+theme = "default"          # default | midnight | amber | mono | ocean | rose | forest | paper
 sort = "cpu"               # cpu | memory | uptime | name | status
 show_stopped = true
 follow_logs = true

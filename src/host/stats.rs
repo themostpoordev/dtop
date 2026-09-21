@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use super::proc::{CoreRaw, DiskRaw, HostRaw, NetRaw, ProcRaw, PAGE_SIZE, SECTOR_SIZE};
-use crate::model::{DiskIo, HostStats, NetIo, ProcessRow};
+use crate::model::{DiskIo, FsRow, HostStats, NetIo, ProcessRow};
 
 /// Upper bound on the emitted process list. The raw list stays in sampler state
 /// so next-tick deltas stay correct — only what the UI sees is truncated.
@@ -53,8 +53,14 @@ pub fn host_stats_from_raw(
         .map(|(now, then)| cpu_percent(then, now))
         .collect::<Vec<_>>();
 
-    let disks = disk_rows(&current.disks, &prev.disks, elapsed);
-    let nets = net_rows(&current.nets, &prev.nets, elapsed);
+    let mut disks = disk_rows(&current.disks, &prev.disks, elapsed);
+    // Busiest first: on docker hosts the interesting device is `sda`/`vda`/
+    // `nvme0n1`, on LVM roots it is `dm-0` — sorting puts it on top on any
+    // machine instead of relying on kernel discovery order.
+    disks.sort_by(|a, b| (b.read_rate + b.write_rate).total_cmp(&(a.read_rate + a.write_rate)));
+    let mut nets = net_rows(&current.nets, &prev.nets, elapsed);
+    // Same idea: eth0/wlan0/tailscale first, idle veths last.
+    nets.sort_by(|a, b| (b.rx_rate + b.tx_rate).total_cmp(&(a.rx_rate + a.tx_rate)));
 
     // Process CPU% uses the SAME sample pair's aggregate totals, so a process
     // can never exceed 100% of the host per-thread time.
@@ -81,6 +87,16 @@ pub fn host_stats_from_raw(
         memory: current.memory.clone(),
         disks,
         nets,
+        mounts: current
+            .mounts
+            .iter()
+            .map(|m| FsRow {
+                device: m.device.clone(),
+                mountpoint: m.mountpoint.clone(),
+                fstype: m.fstype.clone(),
+                size_bytes: m.size_bytes,
+            })
+            .collect(),
         processes,
         num_cpus,
     }
@@ -97,6 +113,7 @@ fn cpu_percent(prev: &CoreRaw, current: &CoreRaw) -> f64 {
 
 fn disk_rows(current: &[DiskRaw], previous: &[DiskRaw], elapsed: f64) -> Vec<DiskIo> {
     let prev_by_name = previous.iter().map(|d| (d.name.as_str(), d)).collect::<HashMap<_, _>>();
+    let elapsed_ms = (elapsed * 1000.0).max(1.0);
     current
         .iter()
         .map(|d| {
@@ -104,12 +121,25 @@ fn disk_rows(current: &[DiskRaw], previous: &[DiskRaw], elapsed: f64) -> Vec<Dis
             let read_delta = d.sectors_read.saturating_sub(prev.map_or(0, |p| p.sectors_read));
             let write_delta =
                 d.sectors_written.saturating_sub(prev.map_or(0, |p| p.sectors_written));
+            let read_op_delta =
+                d.reads_completed.saturating_sub(prev.map_or(0, |p| p.reads_completed));
+            let write_op_delta =
+                d.writes_completed.saturating_sub(prev.map_or(0, |p| p.writes_completed));
+            // Utilization: ms spent doing I/O per wall-clock ms, clamped —
+            // parallel queues can otherwise report >100%.
+            let io_delta_ms = d.io_time_ms.saturating_sub(prev.map_or(0, |p| p.io_time_ms)) as f64;
             DiskIo {
                 name: d.name.clone(),
                 read_bytes: d.sectors_read * SECTOR_SIZE,
                 write_bytes: d.sectors_written * SECTOR_SIZE,
                 read_rate: read_delta as f64 * SECTOR_SIZE as f64 / elapsed,
                 write_rate: write_delta as f64 * SECTOR_SIZE as f64 / elapsed,
+                read_ops: d.reads_completed,
+                write_ops: d.writes_completed,
+                read_iops: read_op_delta as f64 / elapsed,
+                write_iops: write_op_delta as f64 / elapsed,
+                util: (io_delta_ms / elapsed_ms * 100.0).clamp(0.0, 100.0),
+                capacity_bytes: d.capacity_bytes,
             }
         })
         .collect()
@@ -123,12 +153,23 @@ fn net_rows(current: &[NetRaw], previous: &[NetRaw], elapsed: f64) -> Vec<NetIo>
             let prev = prev_by_name.get(n.name.as_str()).copied();
             let rx_delta = n.rx_bytes.saturating_sub(prev.map_or(0, |p| p.rx_bytes));
             let tx_delta = n.tx_bytes.saturating_sub(prev.map_or(0, |p| p.tx_bytes));
+            let rx_pkt_delta = n.rx_packets.saturating_sub(prev.map_or(0, |p| p.rx_packets));
+            let tx_pkt_delta = n.tx_packets.saturating_sub(prev.map_or(0, |p| p.tx_packets));
             NetIo {
                 name: n.name.clone(),
                 rx_bytes: n.rx_bytes,
                 tx_bytes: n.tx_bytes,
                 rx_rate: rx_delta as f64 / elapsed,
                 tx_rate: tx_delta as f64 / elapsed,
+                rx_packets: n.rx_packets,
+                tx_packets: n.tx_packets,
+                rx_pps: rx_pkt_delta as f64 / elapsed,
+                tx_pps: tx_pkt_delta as f64 / elapsed,
+                err_total: n
+                    .rx_errs
+                    .saturating_add(n.rx_drop)
+                    .saturating_add(n.tx_errs)
+                    .saturating_add(n.tx_drop),
             }
         })
         .collect()
@@ -226,26 +267,87 @@ mod tests {
     #[test]
     fn disk_rates_use_sectors_times_512() {
         let mut prev = raw_with(CoreRaw::default(), vec![]);
-        prev.disks = vec![DiskRaw { name: "sda".into(), sectors_read: 100, sectors_written: 50 }];
+        prev.disks = vec![DiskRaw {
+            name: "sda".into(),
+            sectors_read: 100,
+            sectors_written: 50,
+            reads_completed: 10,
+            writes_completed: 5,
+            io_time_ms: 20,
+            ..Default::default()
+        }];
         let mut current = raw_with(CoreRaw::default(), vec![]);
-        current.disks =
-            vec![DiskRaw { name: "sda".into(), sectors_read: 300, sectors_written: 150 }];
+        current.disks = vec![DiskRaw {
+            name: "sda".into(),
+            sectors_read: 300,
+            sectors_written: 150,
+            reads_completed: 30,
+            writes_completed: 15,
+            io_time_ms: 220,
+            ..Default::default()
+        }];
         let stats = host_stats_from_raw(&current, Some(&prev), 2.0, &mut HashMap::new());
         assert_eq!(stats.disks.len(), 1);
         // (300-100)*512 / 2 = 51200 B/s
         assert_eq!(stats.disks[0].read_rate, 51200.0);
         assert_eq!(stats.disks[0].write_rate, 25600.0);
+        // IOPS: (30-10)/2 = 10, (15-5)/2 = 5
+        assert_eq!(stats.disks[0].read_iops, 10.0);
+        assert_eq!(stats.disks[0].write_iops, 5.0);
+        // util: 200 ms of I/O over 2000 ms = 10%
+        assert_eq!(stats.disks[0].util, 10.0);
     }
 
     #[test]
     fn net_rates_from_two_samples() {
         let mut prev = raw_with(CoreRaw::default(), vec![]);
-        prev.nets = vec![NetRaw { name: "eth0".into(), rx_bytes: 1000, tx_bytes: 2000 }];
+        prev.nets = vec![NetRaw {
+            name: "eth0".into(),
+            rx_bytes: 1000,
+            tx_bytes: 2000,
+            rx_packets: 10,
+            tx_packets: 20,
+            ..Default::default()
+        }];
         let mut current = raw_with(CoreRaw::default(), vec![]);
-        current.nets = vec![NetRaw { name: "eth0".into(), rx_bytes: 3000, tx_bytes: 2000 }];
+        current.nets = vec![NetRaw {
+            name: "eth0".into(),
+            rx_bytes: 3000,
+            tx_bytes: 2000,
+            rx_packets: 30,
+            tx_packets: 20,
+            ..Default::default()
+        }];
         let stats = host_stats_from_raw(&current, Some(&prev), 1.0, &mut HashMap::new());
         assert_eq!(stats.nets[0].rx_rate, 2000.0);
         assert_eq!(stats.nets[0].tx_rate, 0.0);
+        assert_eq!(stats.nets[0].rx_pps, 20.0);
+        assert_eq!(stats.nets[0].tx_pps, 0.0);
+    }
+
+    #[test]
+    fn disks_and_nets_sort_busiest_first() {
+        let mut prev = raw_with(CoreRaw::default(), vec![]);
+        prev.disks = vec![
+            DiskRaw { name: "sda".into(), ..Default::default() },
+            DiskRaw { name: "sdb".into(), ..Default::default() },
+        ];
+        prev.nets = vec![
+            NetRaw { name: "eth0".into(), ..Default::default() },
+            NetRaw { name: "vethX".into(), ..Default::default() },
+        ];
+        let mut current = raw_with(CoreRaw::default(), vec![]);
+        current.disks = vec![
+            DiskRaw { name: "sda".into(), sectors_read: 10, ..Default::default() },
+            DiskRaw { name: "sdb".into(), sectors_read: 1000, ..Default::default() },
+        ];
+        current.nets = vec![
+            NetRaw { name: "eth0".into(), rx_bytes: 10, ..Default::default() },
+            NetRaw { name: "vethX".into(), rx_bytes: 9000, ..Default::default() },
+        ];
+        let stats = host_stats_from_raw(&current, Some(&prev), 1.0, &mut HashMap::new());
+        assert_eq!(stats.disks[0].name, "sdb");
+        assert_eq!(stats.nets[0].name, "vethX");
     }
 
     #[test]

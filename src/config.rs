@@ -22,16 +22,33 @@ pub enum ThemeName {
     Midnight,
     Amber,
     Mono,
+    Ocean,
+    Rose,
+    Forest,
+    Paper,
 }
 
 impl ThemeName {
-    pub const ALL: [Self; 4] = [Self::Default, Self::Midnight, Self::Amber, Self::Mono];
+    pub const ALL: [Self; 8] = [
+        Self::Default,
+        Self::Midnight,
+        Self::Amber,
+        Self::Mono,
+        Self::Ocean,
+        Self::Rose,
+        Self::Forest,
+        Self::Paper,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             Self::Default => "default",
             Self::Midnight => "midnight",
             Self::Amber => "amber",
             Self::Mono => "mono",
+            Self::Ocean => "ocean",
+            Self::Rose => "rose",
+            Self::Forest => "forest",
+            Self::Paper => "paper",
         }
     }
     pub fn next(self) -> Self {

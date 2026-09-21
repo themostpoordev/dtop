@@ -5,6 +5,8 @@ docker_socket = "/var/run/docker.sock"
 #       "all"    (host CPU/memory/disk/network/processes, btop-style)
 mode = "docker"
 theme = "default"
+# themes: "default" | "midnight" | "amber" | "mono"
+#         "ocean" | "rose" | "forest" | "paper" (light, for bright terminals)
 sort = "cpu"
 show_stopped = true
 follow_logs = true
