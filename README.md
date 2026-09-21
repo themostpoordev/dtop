@@ -102,10 +102,11 @@ running; it does not crash.
 | Key | Action |
 |-----|--------|
 | `Tab` | next section |
-| `Esc` | back to Home |
+| `Esc` | back (details/logs → previous screen, else home) |
 | `↑` / `↓` | move selection (container list scrolls with you) |
 | `Enter` | open / confirm |
 | `/` | filter current list |
+| `o` | cycle containers sort (cpu → memory → uptime → name → status) |
 | `d` | details |
 | `l` | logs |
 | `s` `x` `r` `p` `u` | start / stop / restart / pause / unpause |

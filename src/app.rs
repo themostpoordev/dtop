@@ -16,6 +16,8 @@ pub struct App {
     pub config_path: PathBuf,
     pub data: AppData,
     pub screen: Screen,
+    /// Where `Esc` returns to from Details/Logs (usually Containers).
+    pub last_screen: Screen,
     pub connection: ConnectionState,
     pub selected_container: usize,
     pub home_selection: usize,
@@ -46,6 +48,7 @@ impl App {
             config_path,
             data: AppData::default(),
             screen: Screen::Home,
+            last_screen: Screen::Home,
             connection: ConnectionState::default(),
             selected_container: 0,
             home_selection: 0,
@@ -79,7 +82,20 @@ impl App {
                 self.should_quit = true
             }
             KeyCode::Esc => {
-                self.screen = Screen::Home;
+                // From a drill-in view go back where you came from
+                // (Containers); from anywhere else go to Home.
+                match self.screen {
+                    Screen::Details | Screen::Logs => {
+                        self.screen = self.last_screen;
+                    }
+                    _ => {
+                        self.screen = Screen::Home;
+                    }
+                }
+                self.command_tx.send(RuntimeCommand::UnsubscribeLogs).await.ok();
+            }
+            KeyCode::Backspace if self.screen == Screen::Details || self.screen == Screen::Logs => {
+                self.screen = self.last_screen;
                 self.command_tx.send(RuntimeCommand::UnsubscribeLogs).await.ok();
             }
             KeyCode::Tab => self.screen = self.screen.next_primary(self.config.mode),
@@ -99,6 +115,8 @@ impl App {
             }
             KeyCode::Char('d') if self.screen == Screen::Containers => self.open_details().await?,
             KeyCode::Char('l') if self.screen == Screen::Containers => self.open_logs().await?,
+            // Cycle Containers sort order (cpu → memory → uptime → name → status).
+            KeyCode::Char('o') if self.screen == Screen::Containers => self.cycle_sort(),
             KeyCode::Char('s') if self.screen == Screen::Containers => {
                 self.request_action(ContainerAction::Start).await?
             }
@@ -134,7 +152,27 @@ impl App {
                 self.connection = state;
                 self.notice = Some(message);
             }
-            RuntimeEvent::Snapshot { containers } => {
+            RuntimeEvent::Snapshot { mut containers } => {
+                // EMA-smooth the jumpy per-tick rates in place (see
+                // `AppData::container_smooth`): first sight shows the raw
+                // value, later ticks blend 0.4 new / 0.6 previous.
+                for container in &mut containers {
+                    let entry = self.data.container_smooth.entry(container.id.clone()).or_insert([
+                        container.metrics.cpu_percent,
+                        container.delta.network_rx_rate,
+                        container.delta.network_tx_rate,
+                    ]);
+                    entry[0] = container.metrics.cpu_percent.mul_add(0.4, entry[0] * 0.6);
+                    entry[1] = container.delta.network_rx_rate.mul_add(0.4, entry[1] * 0.6);
+                    entry[2] = container.delta.network_tx_rate.mul_add(0.4, entry[2] * 0.6);
+                    container.metrics.cpu_percent = entry[0].max(0.0);
+                    container.delta.network_rx_rate = entry[1].max(0.0);
+                    container.delta.network_tx_rate = entry[2].max(0.0);
+                }
+                // Drop state for containers that no longer exist (bounded).
+                self.data
+                    .container_smooth
+                    .retain(|id, _| containers.iter().any(|container| container.id == *id));
                 self.data.containers = containers;
                 if self.selected_container >= self.data.containers.len() {
                     self.selected_container = self.data.containers.len().saturating_sub(1);
@@ -206,11 +244,18 @@ impl App {
             SortOrder::Name => {
                 indices.sort_by_key(|index| self.data.containers[*index].name.to_ascii_lowercase())
             }
+            // CPU buckets (0.5%) + name tiebreak: raw deltas still wobble a
+            // little after smoothing, and without the bucket two containers
+            // at 12.31% vs 12.32% would swap rows every single tick.
             SortOrder::Cpu => indices.sort_by(|a, b| {
-                self.data.containers[*b]
-                    .metrics
-                    .cpu_percent
-                    .total_cmp(&self.data.containers[*a].metrics.cpu_percent)
+                bucket(self.data.containers[*b].metrics.cpu_percent)
+                    .total_cmp(&bucket(self.data.containers[*a].metrics.cpu_percent))
+                    .then_with(|| {
+                        self.data.containers[*a]
+                            .name
+                            .to_ascii_lowercase()
+                            .cmp(&self.data.containers[*b].name.to_ascii_lowercase())
+                    })
             }),
             SortOrder::Memory => indices.sort_by(|a, b| {
                 self.data.containers[*b]
@@ -253,6 +298,7 @@ impl App {
         match self.screen {
             Screen::Home => {
                 let primary = Screen::primary(self.config.mode);
+                self.last_screen = Screen::Home;
                 self.screen = primary[self.home_selection.min(primary.len() - 1)];
             }
             Screen::Containers => self.open_details().await?,
@@ -272,6 +318,7 @@ impl App {
 
     async fn open_details(&mut self) -> Result<()> {
         if let Some(id) = self.selected_id() {
+            self.last_screen = self.screen;
             self.screen = Screen::Details;
             self.command_tx.send(RuntimeCommand::Inspect(id)).await?;
         } else {
@@ -281,6 +328,7 @@ impl App {
     }
     async fn open_logs(&mut self) -> Result<()> {
         if self.selected_id().is_some() {
+            self.last_screen = self.screen;
             self.screen = Screen::Logs;
             self.log_scroll = 0;
             self.data.logs.clear();
@@ -402,6 +450,13 @@ impl App {
     fn selected_id(&self) -> Option<String> {
         self.selected_container_row().map(|container| container.id.clone())
     }
+    /// Cycle the Containers sort order (cpu → memory → uptime → name →
+    /// status) and persist it, so the choice survives restarts.
+    fn cycle_sort(&mut self) {
+        self.config.sort = self.config.sort.next();
+        let _ = self.config.save(&self.config_path);
+        self.notice = Some(format!("sort: {}", self.config.sort.label()));
+    }
     fn change_setting(&mut self, right: bool) {
         match self.settings_selection {
             0 => self.config.mode = self.config.mode.toggle(),
@@ -435,6 +490,12 @@ impl App {
             .send(RuntimeCommand::UpdateSettings { show_stopped: self.config.show_stopped })
             .await;
     }
+}
+
+/// Quantize a CPU% for *ordering* (not display): values inside the same 0.5%
+/// bucket compare equal, so rows stop swapping on sub-percent noise.
+fn bucket(cpu_percent: f64) -> f64 {
+    (cpu_percent * 2.0).round()
 }
 
 fn previous_theme(value: ThemeName) -> ThemeName {
@@ -471,5 +532,107 @@ mod tests {
         assert_eq!(app.visible_indices(), vec![1, 0]);
         app.filter = "z".into();
         assert_eq!(app.visible_indices(), vec![0]);
+    }
+
+    fn snapshot_row(id: &str, name: &str, cpu: f64, rx: f64) -> crate::model::ContainerRow {
+        crate::model::ContainerRow {
+            id: id.into(),
+            name: name.into(),
+            state: "running".into(),
+            metrics: crate::model::Metrics { cpu_percent: cpu, ..Default::default() },
+            delta: crate::model::ResourceDelta { network_rx_rate: rx, ..Default::default() },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn snapshot_smooths_jumpy_container_rates() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut app = App::new(Config::default(), PathBuf::from("/tmp/dtop-test.toml"), tx);
+        // First sight shows the raw value.
+        app.apply_runtime_event(RuntimeEvent::Snapshot {
+            containers: vec![snapshot_row("abc", "web", 100.0, 1000.0)],
+        });
+        assert_eq!(app.data.containers[0].metrics.cpu_percent, 100.0);
+        // 100% → 0% raw would flicker; EMA gives 0*0.4 + 100*0.6 = 60.
+        app.apply_runtime_event(RuntimeEvent::Snapshot {
+            containers: vec![snapshot_row("abc", "web", 0.0, 0.0)],
+        });
+        let cpu = app.data.containers[0].metrics.cpu_percent;
+        assert!((cpu - 60.0).abs() < 1e-9, "expected ~60, got {cpu}");
+        let rx = app.data.containers[0].delta.network_rx_rate;
+        assert!((rx - 600.0).abs() < 1e-9, "expected ~600, got {rx}");
+    }
+
+    #[test]
+    fn snapshot_smooth_state_stays_bounded() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut app = App::new(Config::default(), PathBuf::from("/tmp/dtop-test.toml"), tx);
+        app.apply_runtime_event(RuntimeEvent::Snapshot {
+            containers: vec![snapshot_row("gone", "old", 10.0, 10.0)],
+        });
+        assert_eq!(app.data.container_smooth.len(), 1);
+        app.apply_runtime_event(RuntimeEvent::Snapshot {
+            containers: vec![snapshot_row("new", "web", 10.0, 10.0)],
+        });
+        assert_eq!(app.data.container_smooth.len(), 1);
+        assert!(app.data.container_smooth.contains_key("new"));
+    }
+
+    #[test]
+    fn cpu_sort_holds_still_inside_bucket() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut app = App::new(Config::default(), PathBuf::from("/tmp/dtop-test.toml"), tx);
+        app.config.sort = SortOrder::Cpu;
+        // 12.31% vs 12.32% land in the same 0.5% bucket → name order wins,
+        // regardless of insertion order, so rows stop swapping on noise.
+        app.data.containers =
+            vec![snapshot_row("1", "bravo", 12.31, 0.0), snapshot_row("2", "alpha", 12.32, 0.0)];
+        assert_eq!(app.visible_indices(), vec![1, 0]);
+        app.data.containers =
+            vec![snapshot_row("2", "alpha", 12.32, 0.0), snapshot_row("1", "bravo", 12.31, 0.0)];
+        assert_eq!(app.visible_indices(), vec![0, 1]);
+        // A real gap still orders by CPU.
+        app.data.containers =
+            vec![snapshot_row("1", "bravo", 50.0, 0.0), snapshot_row("2", "alpha", 12.32, 0.0)];
+        assert_eq!(app.visible_indices(), vec![0, 1]);
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    fn run_key(app: &mut App, code: KeyCode) {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(app.handle_key(key(code))).unwrap();
+    }
+
+    #[test]
+    fn sort_key_cycles_containers_order() {
+        // Buffered channel: key handling sends runtime commands with no
+        // receiver in tests — capacity must exceed sends per test.
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::new(Config::default(), PathBuf::from("/tmp/dtop-test.toml"), tx);
+        app.screen = Screen::Containers;
+        assert_eq!(app.config.sort, SortOrder::Cpu);
+        run_key(&mut app, KeyCode::Char('o'));
+        assert_eq!(app.config.sort, SortOrder::Memory);
+        assert_eq!(app.notice.as_deref(), Some("sort: memory"));
+        run_key(&mut app, KeyCode::Char('o'));
+        assert_eq!(app.config.sort, SortOrder::Uptime);
+    }
+
+    #[test]
+    fn esc_returns_from_details_to_previous_screen() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut app = App::new(Config::default(), PathBuf::from("/tmp/dtop-test.toml"), tx);
+        app.screen = Screen::Details;
+        app.last_screen = Screen::Containers;
+        run_key(&mut app, KeyCode::Esc);
+        assert_eq!(app.screen, Screen::Containers);
+        // Everywhere else Esc still goes Home.
+        app.screen = Screen::Overview;
+        run_key(&mut app, KeyCode::Esc);
+        assert_eq!(app.screen, Screen::Home);
     }
 }

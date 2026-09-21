@@ -22,8 +22,12 @@ pub(super) fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         .split(rows[1]);
 
     // CPU panel: big % + scrolling sparkline + per-service bars (btop style).
+    // Fixed 0–100 scale on purpose: the sparkline never rescales, so it
+    // cannot jump vertically — stability comes from the scale plus the
+    // EMA-smoothed values underneath.
     let cpu_history = app.data.history.as_slice_cpu();
-    let cpu_latest = cpu_history.last().copied().unwrap_or(0);
+    let cpu_latest = app.data.history.latest_cpu();
+    let cpu_peak = app.data.history.peak_cpu();
     let cpu_top = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Length(6), Constraint::Min(4)])
@@ -33,7 +37,10 @@ pub(super) fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
             format!("{cpu_latest}%"),
             Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         )),
-        Line::from(Span::styled("total cpu", Style::default().fg(theme.muted))),
+        Line::from(Span::styled(
+            format!("total cpu · peak {cpu_peak}%"),
+            Style::default().fg(theme.muted),
+        )),
     ];
     frame.render_widget(Paragraph::new(big).block(panel(theme, "CPU")), cpu_top[0]);
     frame.render_widget(
@@ -50,7 +57,13 @@ pub(super) fn overview(frame: &mut Frame, app: &App, area: Rect, theme: Theme) {
         .iter()
         .map(|c| (c.name.clone(), c.metrics.cpu_percent))
         .collect::<Vec<_>>();
-    top_cpu.sort_by(|a, b| b.1.total_cmp(&a.1));
+    // Same bucketed ordering as the Containers table: rows hold still while
+    // values breathe inside their 0.5% bucket.
+    top_cpu.sort_by(|a, b| {
+        ((b.1 * 2.0).round())
+            .total_cmp(&(a.1 * 2.0).round())
+            .then_with(|| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()))
+    });
     for (name, percent) in top_cpu.into_iter().take(8) {
         if percent <= 0.0 {
             continue;

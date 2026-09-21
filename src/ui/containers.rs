@@ -17,9 +17,9 @@ pub(super) fn containers(frame: &mut Frame, app: &App, area: Rect, theme: Theme)
     let filter = if app.filter_mode {
         format!("filter: {}_", app.filter)
     } else if app.filter.is_empty() {
-        "filter: none · / to search".into()
+        "filter: none · / search · o sort".into()
     } else {
-        format!("filter: {} · / edit", app.filter)
+        format!("filter: {} · / edit · o sort", app.filter)
     };
     frame.render_widget(
         Paragraph::new(filter)

@@ -42,6 +42,14 @@ impl History {
     pub fn as_slice_cpu(&self) -> Vec<u64> {
         self.cpu.iter().copied().collect()
     }
+    /// Latest smoothed sample, 0 before the first snapshot.
+    pub fn latest_cpu(&self) -> u64 {
+        self.cpu.back().copied().unwrap_or(0)
+    }
+    /// Highest smoothed sample in the window — graph "peak" label.
+    pub fn peak_cpu(&self) -> u64 {
+        self.cpu.iter().copied().max().unwrap_or(0)
+    }
     pub fn as_slice_memory(&self) -> Vec<u64> {
         self.memory.iter().copied().collect()
     }

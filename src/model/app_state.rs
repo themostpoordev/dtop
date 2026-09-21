@@ -127,6 +127,15 @@ pub struct AppData {
     /// Docker daemon is unreachable.
     pub host: HostStats,
     pub host_history: HostHistory,
+    /// EMA state for per-container rates, keyed by container id:
+    /// [cpu_percent, network_rx_rate, network_tx_rate].
+    ///
+    /// Docker stats arrive as raw 500 ms deltas — and each container is only
+    /// re-sampled every few ticks — so the raw numbers jump (0% ↔ 80%) and
+    /// rows/graphs visibly dance. Smoothing here keeps every consumer
+    /// (Overview graph + bars, Containers table, history totals) calm.
+    /// Same 0.4 new / 0.6 previous factor as process CPU smoothing.
+    pub container_smooth: HashMap<String, [f64; 3]>,
 }
 
 impl Default for AppData {
@@ -145,6 +154,7 @@ impl Default for AppData {
             history: super::History::new(),
             host: HostStats::default(),
             host_history: HostHistory::default(),
+            container_smooth: HashMap::new(),
         }
     }
 }
